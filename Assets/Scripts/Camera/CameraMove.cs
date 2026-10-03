@@ -376,7 +376,7 @@ public class CameraMove : MonoBehaviour
             controlledCamera = GetComponent<Camera>();
         if (BackGround == null)
             return Warn("请将场景中的 Grid 或 Tilemap 拖入 BackGround。");
-        if (BackGround.transform.IsChildOf(transform))
+        if (BackGround.transform.IsChildOf(gameObject.transform))
             return Warn("BackGround 不能是相机本身或相机的子物体。");
         if (controlledCamera.aspect <= 0f)
             return Warn("相机的画面宽高比必须大于零。");
