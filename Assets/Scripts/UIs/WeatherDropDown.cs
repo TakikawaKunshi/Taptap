@@ -28,6 +28,10 @@ public class WeatherDropDown : MonoBehaviour
     private GameObject weatherObject;
     private WeatherBase weatherBase;
 
+    [SerializeField, Tooltip("绑定时间管理器后，过夜期间自动关闭并锁定天气菜单；留空则独立使用。")]
+    private TimeManager timeManager;
+    private TimeManager subscribedTimeManager;
+
     [Header("天气选项")]
     [SerializeField, Tooltip("在此编辑文字与天气类型；自动同步到 TMP_Dropdown 的 Options。")]
     private List<WeatherOption> weatherOptions = new List<WeatherOption>
@@ -38,7 +42,14 @@ public class WeatherDropDown : MonoBehaviour
 
     public WeatherBase Weather => weatherBase;
 
+    /// <summary>每天可切换一次天气；没有绑定 TimeManager 时，按同一天处理。</summary>
+    public int WeatherChangePoints => lastWeatherChangeDay == CurrentWeatherDay ? 0 : 1;
+    public event Action<int> WeatherChangePointsChanged;
+
     private bool refreshRequested;
+    private int lastWeatherChangeDay = -1;
+    private int lastNotifiedPoints = -1;
+    private int CurrentWeatherDay => timeManager != null ? timeManager.CurrentDay : 1;
 
     private void Reset()
     {
@@ -57,6 +68,9 @@ public class WeatherDropDown : MonoBehaviour
     {
         if (tmpWeatherDropDown != null)
             tmpWeatherDropDown.onValueChanged.RemoveListener(OnWeatherChanged);
+        if (subscribedTimeManager != null)
+            subscribedTimeManager.StateChanged -= RefreshInteraction;
+        subscribedTimeManager = null;
     }
 
     private void OnValidate()
@@ -113,6 +127,48 @@ public class WeatherDropDown : MonoBehaviour
         tmpWeatherDropDown.SetValueWithoutNotify(selectedIndex);
         tmpWeatherDropDown.RefreshShownValue();
         FitTemplate(tmpWeatherDropDown.template, labels.Count);
+        BindTimeManager();
+        RefreshInteraction();
+    }
+
+    private void BindTimeManager()
+    {
+        if (!Application.IsPlaying(gameObject) || subscribedTimeManager == timeManager)
+            return;
+        if (subscribedTimeManager != null)
+            subscribedTimeManager.StateChanged -= RefreshInteraction;
+        subscribedTimeManager = timeManager;
+        if (subscribedTimeManager != null)
+            subscribedTimeManager.StateChanged += RefreshInteraction;
+    }
+
+    private void RefreshInteraction()
+    {
+        if (!Application.IsPlaying(gameObject) || tmpWeatherDropDown == null)
+            return;
+        bool canOperate = timeManager == null || timeManager.CanOperate;
+        int points = WeatherChangePoints;
+        tmpWeatherDropDown.interactable = canOperate && points > 0 && weatherBase != null
+            && tmpWeatherDropDown.options.Count > 0;
+        if (!tmpWeatherDropDown.interactable)
+            tmpWeatherDropDown.Hide();
+        if (weatherBase != null && weatherOptions != null)
+        {
+            // 新一天可能由其他游戏逻辑更新天气，只同步显示，不触发天气选择回调。
+            for (int i = 0; i < weatherOptions.Count; i++)
+            {
+                if (weatherOptions[i].weatherType != weatherBase.weatherType)
+                    continue;
+                tmpWeatherDropDown.SetValueWithoutNotify(i);
+                break;
+            }
+        }
+
+        if (lastNotifiedPoints != points)
+        {
+            lastNotifiedPoints = points;
+            WeatherChangePointsChanged?.Invoke(points);
+        }
     }
 
     private void OnWeatherChanged(int index)
@@ -120,10 +176,21 @@ public class WeatherDropDown : MonoBehaviour
         // 编辑预览只更新 UI，不改变场景天气，也不增加连续天气计数。
         if (!Application.IsPlaying(gameObject) || weatherOptions == null || index < 0 || index >= weatherOptions.Count)
             return;
-
         weatherBase = weatherObject != null ? weatherObject.GetComponent<WeatherBase>() : null;
-        if (weatherBase != null)
-            weatherBase.weatherType = weatherOptions[index].weatherType;
+        if ((timeManager != null && !timeManager.CanOperate) || WeatherChangePoints == 0)
+        {
+            // 不仅禁用 UI，也拦截直接设置 Dropdown.value 的请求，并恢复为实际天气。
+            RefreshInteraction();
+            return;
+        }
+
+        if (weatherBase == null || weatherBase.weatherType == weatherOptions[index].weatherType)
+            return;
+
+        // 必须先扣点，再通知 UI，防止回调中再次切换天气。
+        lastWeatherChangeDay = CurrentWeatherDay;
+        weatherBase.weatherType = weatherOptions[index].weatherType;
+        RefreshInteraction();
     }
 
     private void FitTemplate(RectTransform template, int optionCount)
