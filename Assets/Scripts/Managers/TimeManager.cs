@@ -5,6 +5,7 @@ using UnityEngine;
 public enum DayPhase
 {
     FirstFreeAction,
+    // 保留原枚举值：已使用过自由操作、但当天仍有剩余次数的阶段。
     SecondFreeAction,
     NightSettlement,
     WaitingForNightSettlement
@@ -17,18 +18,21 @@ public class TimeManager : MonoBehaviour
     private int startingDay = 1;
     [SerializeField, Tooltip("负责过夜结算的组件；不指定时尝试获取本物体上的 NightSettlement。")]
     private NightSettlement nightSettlement;
+    private int dailyActions = 2;
+    private int usedActions;
+    private bool initialized;
 
     public int CurrentDay { get; private set; } = 1;
     public DayPhase Phase { get; private set; } = DayPhase.FirstFreeAction;
     public bool IsNightSettlement => Phase == DayPhase.NightSettlement;
     public bool CanOperate => isActiveAndEnabled
-        && (Phase == DayPhase.FirstFreeAction || Phase == DayPhase.SecondFreeAction);
+        && !IsNightSettlement && RemainingActions > 0;
     public bool IsSettlementRunning => settlementRoutine != null;
     public bool CanRequestNightSettlement => isActiveAndEnabled && !IsSettlementRunning
         && nightSettlement != null && nightSettlement.CanSettle;
     public string LastSettlementError { get; private set; }
-    public int RemainingActions => Phase == DayPhase.FirstFreeAction ? 2
-        : Phase == DayPhase.SecondFreeAction ? 1 : 0;
+    public int DailyActions => dailyActions;
+    public int RemainingActions => IsNightSettlement ? 0 : Mathf.Max(0, dailyActions - usedActions);
 
     public event Action<int> DayChanged;
     public event Action<DayPhase> PhaseChanged;
@@ -45,9 +49,19 @@ public class TimeManager : MonoBehaviour
 
     private void Awake()
     {
+        Initialize();
+    }
+
+    private void Initialize()
+    {
+        // ActionTimes 可能先于本组件 Awake 配置额度，不能随后重置已建立的状态。
+        if (initialized)
+            return;
+        initialized = true;
         CurrentDay = Mathf.Max(1, startingDay);
         if (nightSettlement == null)
             nightSettlement = GetComponent<NightSettlement>();
+        UpdateActionPhase();
     }
 
     private void OnEnable()
@@ -75,25 +89,48 @@ public class TimeManager : MonoBehaviour
         StateChanged?.Invoke();
     }
 
+    /// <summary>设置每日额度；保留当天已消耗次数，重复配置或重新打开 UI 不会重置次数。</summary>
+    public void ConfigureDailyActions(int count)
+    {
+        Initialize();
+        count = Mathf.Max(0, count);
+        if (dailyActions == count)
+            return;
+        dailyActions = count;
+        DayPhase previousPhase = Phase;
+        if (!IsNightSettlement)
+            UpdateActionPhase();
+        if (Phase != previousPhase)
+            PhaseChanged?.Invoke(Phase);
+        StateChanged?.Invoke();
+    }
+
     /// <summary>结束一次自由操作；同帧重复调用、过夜中或停用时返回 false。</summary>
     public bool TryFinishFreeAction()
     {
-        if (!CanOperate || advancing || lastAdvanceFrame == Time.frameCount)
+        if (lastAdvanceFrame == Time.frameCount)
+            return false;
+        return TryPerformFreeAction(() => true);
+    }
+
+    /// <summary>只有操作返回成功才扣除一次；执行期间阻止嵌套投放或过夜，失败和异常不扣次数。</summary>
+    public bool TryPerformFreeAction(Func<bool> action)
+    {
+        Initialize();
+        if (action == null || !CanOperate || advancing)
             return false;
         advancing = true;
         try
         {
+            if (!action())
+                return false;
+
+            usedActions++;
             lastAdvanceFrame = Time.frameCount;
-            if (Phase == DayPhase.FirstFreeAction)
-            {
-                Phase = DayPhase.SecondFreeAction;
-            }
-            else
-            {
-                // 两次操作耗尽仅进入等待状态，不自动执行过夜。
-                Phase = DayPhase.WaitingForNightSettlement;
-            }
-            PhaseChanged?.Invoke(Phase);
+            DayPhase previousPhase = Phase;
+            UpdateActionPhase();
+            if (Phase != previousPhase)
+                PhaseChanged?.Invoke(Phase);
             StateChanged?.Invoke();
             return true;
         }
@@ -101,6 +138,13 @@ public class TimeManager : MonoBehaviour
         {
             advancing = false;
         }
+    }
+
+    private void UpdateActionPhase()
+    {
+        // 次数耗尽仅等待用户点击过夜，不自动推进日期。
+        Phase = RemainingActions == 0 ? DayPhase.WaitingForNightSettlement
+            : usedActions == 0 ? DayPhase.FirstFreeAction : DayPhase.SecondFreeAction;
     }
 
     /// <summary>由过夜按钮点击调用。允许直接结束当天；中断或失败后重试保留原结算日期和天气。</summary>
@@ -179,6 +223,8 @@ public class TimeManager : MonoBehaviour
             // 只有过夜成功才进入下一天，发布事件时所有状态都已更新。
             CurrentDay = pendingNightDay + 1;
             Phase = DayPhase.FirstFreeAction;
+            usedActions = 0;
+            UpdateActionPhase();
             LastSettlementError = null;
             lastAdvanceFrame = Time.frameCount;
             lastNightRequestFrame = Time.frameCount;
