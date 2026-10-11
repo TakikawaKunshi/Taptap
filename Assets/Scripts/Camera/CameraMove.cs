@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.Tilemaps;
+using UnityEngine.UI;
 
 /// <summary>相机的两种状态：自由移动和地图全景。</summary>
 public enum Camera_State
@@ -50,6 +52,7 @@ public class CameraMove : MonoBehaviour
     private const float FitPadding = 1.02f;
     private Camera controlledCamera;
     private readonly List<Renderer> backgroundRenderers = new List<Renderer>();
+    private readonly List<RaycastResult> uiHits = new List<RaycastResult>();
     private readonly Vector3[] rectangleCorners = new Vector3[4];
     private readonly Vector3[] backgroundCorners = new Vector3[8];
     private Bounds backgroundBounds;
@@ -194,6 +197,8 @@ public class CameraMove : MonoBehaviour
         float maximum = GetMaximumZoom(view.rotation);
         targetZoom = Mathf.Clamp(targetZoom, minimum, maximum);
         float scroll = Input.mouseScrollDelta.y;
+        if (scroll != 0f && IsPointerOverUI(mousePosition))
+            scroll = 0f;
         if (scroll != 0f)
         {
             float scale = Mathf.Exp(Mathf.Clamp(-scroll * zoomSensitivity, -10f, 10f));
@@ -219,6 +224,22 @@ public class CameraMove : MonoBehaviour
             view.distance = zoom;
 
         ApplyView(ClampFreeView(view));
+    }
+
+    // 相机先于 EventSystem 更新，直接检测本帧位置，避免浏览卡片时同时缩放地图。
+    private bool IsPointerOverUI(Vector2 screenPosition)
+    {
+        if (EventSystem.current == null)
+            return false;
+        var pointer = new PointerEventData(EventSystem.current) { position = screenPosition };
+        uiHits.Clear();
+        EventSystem.current.RaycastAll(pointer, uiHits);
+        foreach (RaycastResult hit in uiHits)
+        {
+            if (hit.module is GraphicRaycaster)
+                return true;
+        }
+        return false;
     }
 
     /// <summary>求鼠标射线与地图平面的交点；screenPosition 是屏幕像素坐标，point 输出世界坐标，返回是否相交。</summary>

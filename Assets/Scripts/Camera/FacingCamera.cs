@@ -1,27 +1,17 @@
-using System.Collections;
-using System.Collections.Generic;
 using UnityEngine;
 
+/// <summary>让当前所有直接子物体朝向主相机，支持运行时投放和移除物种。</summary>
 public class FacingCamera : MonoBehaviour
 {
-    Transform[] Childs;
-
-    // Start is called before the first frame update
-    void Start()
+    private void LateUpdate()
     {
-        Childs = new Transform[gameObject.transform.childCount];
-        for(int i =0;i< gameObject.transform.childCount; i++)
-        {
-            Childs[i] = gameObject.transform.GetChild(i);
-        }
-    }
+        Camera camera = Camera.main;
+        if (camera == null)
+            return;
 
-    // Update is called once per frame
-    void Update()
-    {
-        for (int i = 0; i < gameObject.transform.childCount; i++)
-        {
-            Childs[i].rotation=Camera.main.transform.rotation;
-        }
+        // 相机移动后再同步；直接遍历当前层级，避免新增子物体导致旧缓存越界。
+        Quaternion rotation = camera.transform.rotation;
+        foreach (Transform child in transform)
+            child.rotation = rotation;
     }
 }

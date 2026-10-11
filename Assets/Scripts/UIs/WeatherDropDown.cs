@@ -50,6 +50,9 @@ public class WeatherDropDown : MonoBehaviour
     private int lastWeatherChangeDay = -1;
     private int lastNotifiedPoints = -1;
     private int CurrentWeatherDay => timeManager != null ? timeManager.CurrentDay : 1;
+    // 天气切换使用独立点数；行动力耗尽后的等待阶段仍允许切换天气。
+    private bool IsWeatherInteractionAllowed => timeManager == null
+        || (timeManager.isActiveAndEnabled && !timeManager.IsNightSettlement);
 
     private void Reset()
     {
@@ -146,9 +149,8 @@ public class WeatherDropDown : MonoBehaviour
     {
         if (!Application.IsPlaying(gameObject) || tmpWeatherDropDown == null)
             return;
-        bool canOperate = timeManager == null || timeManager.CanOperate;
         int points = WeatherChangePoints;
-        tmpWeatherDropDown.interactable = canOperate && points > 0 && weatherBase != null
+        tmpWeatherDropDown.interactable = IsWeatherInteractionAllowed && points > 0 && weatherBase != null
             && tmpWeatherDropDown.options.Count > 0;
         if (!tmpWeatherDropDown.interactable)
             tmpWeatherDropDown.Hide();
@@ -177,7 +179,7 @@ public class WeatherDropDown : MonoBehaviour
         if (!Application.IsPlaying(gameObject) || weatherOptions == null || index < 0 || index >= weatherOptions.Count)
             return;
         weatherBase = weatherObject != null ? weatherObject.GetComponent<WeatherBase>() : null;
-        if ((timeManager != null && !timeManager.CanOperate) || WeatherChangePoints == 0)
+        if (!IsWeatherInteractionAllowed || WeatherChangePoints == 0)
         {
             // 不仅禁用 UI，也拦截直接设置 Dropdown.value 的请求，并恢复为实际天气。
             RefreshInteraction();

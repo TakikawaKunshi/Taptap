@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using TMPro;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.Tilemaps;
@@ -14,8 +13,8 @@ public class TileMapManager : MonoBehaviour
     private Tilemap tilemap;
     [SerializeField, Tooltip("拖入天气对象上的 WeatherBase，与天气下拉框使用同一个对象。")]
     private WeatherBase weather;
-    [SerializeField, Tooltip("拖入 UI 中用于显示格子状态的 Text-TextMeshPro。")]
-    private TMP_Text message;
+    [SerializeField, Tooltip("格子消息追加到此面板的 InformationSV；留空时查找同场景中的唯一面板，包括隐藏对象。")]
+    private MessagePanel messagePanel;
     [SerializeField, Tooltip("用于点击地图的相机；留空时使用 MainCamera。")]
     private Camera inputCamera;
 
@@ -27,10 +26,11 @@ public class TileMapManager : MonoBehaviour
     private WeatherBase lastWeatherSource;
     private bool lastHasWeather;
     private E_WeatherType lastWeather;
+    private bool messagePanelWarningShown;
 
     public Tilemap Tilemap => tilemap;
     public WeatherBase Weather => weather;
-    public TMP_Text Message => message;
+    public MessagePanel MessagePanel => messagePanel;
     public IReadOnlyCollection<TileCell> Cells => cells.Values;
     public int CellCount => cells.Count;
     public TileCell SelectedCell { get; private set; }
@@ -54,8 +54,7 @@ public class TileMapManager : MonoBehaviour
         InitializeCells();
         if (weather == null)
             Debug.LogWarning("TileMapManager：请绑定 WeatherBase，格子才能同步天气状态。", this);
-        if (message == null)
-            Debug.LogWarning("TileMapManager：请绑定 Message，用于显示点击的格子状态。", this);
+        ResolveMessagePanel();
     }
 
     private void OnEnable()
@@ -142,6 +141,11 @@ public class TileMapManager : MonoBehaviour
     /// <summary>读取当前选定天气；同一天切换天气即可刷新，层数始终为 1。</summary>
     public void RefreshWeather()
     {
+        RefreshWeather(true);
+    }
+
+    private void RefreshWeather(bool showSelectedStatus)
+    {
         if (!initialized)
             return;
         bool hasWeather = weather != null;
@@ -163,8 +167,8 @@ public class TileMapManager : MonoBehaviour
             else
                 cell.ClearWeather();
         }
-        if (SelectedCell != null && message != null)
-            message.text = SelectedCell.GetStatusText();
+        if (showSelectedStatus && SelectedCell != null)
+            PublishCellStatus(SelectedCell);
     }
 
     public bool TryGetCell(Vector2Int coordinates, out TileCell cell)
@@ -226,10 +230,50 @@ public class TileMapManager : MonoBehaviour
     {
         if (cell == null || cell.Manager != this)
             return;
-        RefreshWeather();
+        // 点击时先同步数据，再只记录本次选中的格子，避免同时追加旧选中格子的消息。
+        RefreshWeather(false);
         SelectedCell = cell;
-        if (message != null)
-            message.text = cell.GetStatusText();
+        PublishCellStatus(cell);
+    }
+
+    private void PublishCellStatus(TileCell cell)
+    {
+        if (ResolveMessagePanel())
+            messagePanel.ShowInformation(cell.GetStatusText());
+    }
+
+    private bool ResolveMessagePanel()
+    {
+        if (messagePanel != null)
+            return true;
+
+        // 缓存引用；只有尚未绑定或原面板已销毁时才重新查找，隐藏面板也能接收消息。
+        MessagePanel candidate = null;
+        bool multiplePanels = false;
+        foreach (MessagePanel panel in FindObjectsOfType<MessagePanel>(true))
+        {
+            if (panel.gameObject.scene != gameObject.scene)
+                continue;
+            if (candidate != null)
+            {
+                multiplePanels = true;
+                break;
+            }
+            candidate = panel;
+        }
+        if (!multiplePanels && candidate != null)
+        {
+            messagePanel = candidate;
+            messagePanelWarningShown = false;
+            return true;
+        }
+        if (!messagePanelWarningShown)
+        {
+            string reason = multiplePanels ? "同场景存在多个 MessagePanel" : "同场景未找到 MessagePanel";
+            Debug.LogWarning("TileMapManager：" + reason + "，请在 Inspector 中绑定消息面板。", this);
+            messagePanelWarningShown = true;
+        }
+        return false;
     }
 
     private void OnDestroy()
