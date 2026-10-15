@@ -12,6 +12,10 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class AnimalVisualBinder : MonoBehaviour
 {
+    // 位于覆盖植物 1、主体植物 2 之上；携带物再加 1，仍低于 UI 的排序值。
+    // 使用常量，避免场景中旧的 50 排序配置覆盖代码中的新值。
+    private const int SortingOrder = 3;
+
     [SerializeField] private AnimalSpawner spawner;
     [SerializeField, Tooltip("留空时自动查找场景里的 AnimalSpawner。")]
     private PlantSettlementBridge plantBridge;
@@ -19,8 +23,6 @@ public class AnimalVisualBinder : MonoBehaviour
     private Texture2D animalTexture;
     [SerializeField] private Material spriteMaterial;
     [SerializeField, Min(0.05f)] private float syncInterval = 0.25f;
-    [SerializeField, Tooltip("画在地形与植物之上，避免被格子盖住。")]
-    private int sortingOrder = 50;
     [SerializeField, Tooltip("同一格多只动物沿对角线错开的间距。")]
     private float spacing = 0.18f;
 
@@ -95,7 +97,7 @@ public class AnimalVisualBinder : MonoBehaviour
             go.transform.SetParent(transform, false);
             visual = go.AddComponent<AnimalVisual>();
             visual.GetComponent<SpriteRenderer>().sharedMaterial = ResolveMaterial();
-            visual.Bind(animal, ResolveSprite(), sortingOrder);
+            visual.Bind(animal, ResolveSprite(), SortingOrder);
             visuals[animal] = visual;
         }
 

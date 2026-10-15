@@ -12,6 +12,11 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public class PlantVisualBinder : MonoBehaviour
 {
+    // 全局绘制顺序：地形 0、覆盖植物 1、主体植物 2、动物 3、携带物 4，均低于 UI。
+    // 使用常量，避免场景中旧的 20 / 30 排序配置覆盖代码中的新值。
+    private const int CoverOrder = 1;
+    private const int SubjectOrder = 2;
+
     [SerializeField] private TileMapManager map;
     [SerializeField] private PlantSettlementBridge bridge;
     [SerializeField, Tooltip("临时用图；换正式美术时直接替换这张贴图即可。")]
@@ -20,8 +25,6 @@ public class PlantVisualBinder : MonoBehaviour
     private Material spriteMaterial;
     [SerializeField, Min(0.05f), Tooltip("轮询间隔（秒），兜住没有发事件的种植路径。")]
     private float syncInterval = 0.25f;
-    [SerializeField] private int subjectOrder = 30;
-    [SerializeField] private int coverOrder = 20;
     [SerializeField, Tooltip("同一格多个覆盖层沿对角线错开的间距。")]
     private float coverSpacing = 0.16f;
 
@@ -128,7 +131,7 @@ public class PlantVisualBinder : MonoBehaviour
             visual = go.AddComponent<PlantVisual>();
             // 默认材质是内置管线的 Sprites-Default，URP 下会粉红；先换成项目在用的 2D 精灵材质。
             visual.GetComponent<SpriteRenderer>().sharedMaterial = ResolveMaterial();
-            visual.Bind(plant, ResolveSprite(), subject ? subjectOrder : coverOrder, subject);
+            visual.Bind(plant, ResolveSprite(), subject ? SubjectOrder : CoverOrder, subject);
             visuals[plant] = visual;
         }
 

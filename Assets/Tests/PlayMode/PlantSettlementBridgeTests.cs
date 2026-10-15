@@ -35,8 +35,7 @@ public class PlantSettlementBridgeTests
         Assert.IsNotNull(time, "场景里必须有 TimeManager");
         Assert.IsNotNull(weather, "场景里必须有 WeatherBase");
 
-        spawner.SpawnInitialLayout();
-        Assert.Greater(spawner.LastPlacedCount, 0);
+        Assert.Greater(spawner.LastPlacedCount, 0, "开局应自动铺设植物");
 
         // 桥接组件在 OnEnable 里自动查找引用并订阅 DayChanged。
         var host = new GameObject("Plant Settlement Bridge");

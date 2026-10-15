@@ -4,8 +4,8 @@ using UnityEngine;
 
 /// <summary>
 /// 植物投放与调试入口。
-/// 首版没有植物卡片 UI，因此通过 Inspector 菜单按策划案第八章的建议初始配置铺场。
-/// 动物与天气不参与本脚本的职责，它只负责把植物放到格子上并驱动一次植物结算。
+/// 开局自动按策划案第八章的建议初始配置铺场，也保留 Inspector 手动铺场入口。
+/// 只负责放置植物与初始余屑，天气和过夜结算由对应组件驱动。
 /// </summary>
 [DisallowMultipleComponent]
 [AddComponentMenu("Ecology/Plant Spawner")]
@@ -25,6 +25,10 @@ public class PlantSpawner : MonoBehaviour
     [SerializeField, Tooltip("场景中的 TileMapManager；留空时自动查找。")]
     private TileMapManager map;
 
+    [Header("开局初始化")]
+    [SerializeField, Tooltip("进入游戏后自动铺设初始植物；需要空场测试时取消勾选。")]
+    private bool spawnOnStart = true;
+
     [Header("策划案建议的初始配置")]
     [SerializeField, Tooltip("按《七日生态箱系统策划案》第八章的建议初始配置摆放植物。")]
     private List<Placement> initialLayout = new List<Placement>
@@ -43,6 +47,15 @@ public class PlantSpawner : MonoBehaviour
     };
 
     private int lastPlacedCount;
+    private bool hasSpawnedInitialLayout;
+    private readonly HashSet<TileCell> seededDetritusCells = new HashSet<TileCell>();
+
+    private void Start()
+    {
+        // 铺场入口会先初始化地图，不依赖 TileMapManager.Start 的执行先后。
+        if (spawnOnStart && !hasSpawnedInitialLayout)
+            SpawnInitialLayout();
+    }
 
     public TileMapManager Map
     {
@@ -62,7 +75,7 @@ public class PlantSpawner : MonoBehaviour
 
     /// <summary>
     /// 按策划案建议的初始配置铺设植物。
-    /// 重复调用不会重复放置：目标格已被占用时直接跳过，不会覆盖已有植物。
+    /// 重复调用跳过已占用格；初始余屑每格只发放一次，清空后可重新铺设。
     /// </summary>
     [ContextMenu("铺设策划案初始配置")]
     public void SpawnInitialLayout()
@@ -106,10 +119,11 @@ public class PlantSpawner : MonoBehaviour
 
         for (int i = 0; i < detritusSeeds.Count; i++)
         {
-            if (manager.TryGetCell(detritusSeeds[i], out TileCell cell))
+            if (manager.TryGetCell(detritusSeeds[i], out TileCell cell) && seededDetritusCells.Add(cell))
                 cell.Detritus += 1;
         }
 
+        hasSpawnedInitialLayout = true;
         Debug.Log("PlantSpawner：已铺设 " + lastPlacedCount + " 株植物，跳过 " + skipped + " 格"
             + "（格子不存在或已被占用）。", this);
     }
@@ -131,6 +145,8 @@ public class PlantSpawner : MonoBehaviour
             cell.Detritus = 0;
         }
 
+        seededDetritusCells.Clear();
+        hasSpawnedInitialLayout = false;
         lastPlacedCount = 0;
         Debug.Log("PlantSpawner：已清空全部植物与余屑。", this);
     }

@@ -39,10 +39,10 @@ public class AnimalSettlementSceneTests
     }
 
     [Test]
-    public void 铺设初始动物后五种动物都在地图上()
+    public void 场景启动后自动投放五种动物()
     {
         AnimalSpawner spawner = Object.FindObjectOfType<AnimalSpawner>();
-        spawner.SpawnInitialLayout();
+        Assert.AreEqual(5, spawner.LastPlacedCount, "无需手动投放，开局应自动生成 5 只动物");
 
         // 策划案第八章：青蛙、蚯蚓、蜗牛、蚂蚁、蜘蛛各一只，初始饱腹 2。
         Assert.AreEqual(5, spawner.LiveCount, "初始配置应当投放 5 只动物");
@@ -67,6 +67,10 @@ public class AnimalSettlementSceneTests
         Assert.AreEqual(1, snails, "应有一只蜗牛");
         Assert.AreEqual(1, ants, "应有一只蚂蚁");
         Assert.AreEqual(1, spiders, "应有一只蜘蛛");
+
+        spawner.SpawnInitialLayout();
+        Assert.AreEqual(0, spawner.LastPlacedCount, "自动投放后再次手动铺场应跳过已有动物");
+        Assert.AreEqual(5, spawner.LiveCount);
     }
 
     [Test]

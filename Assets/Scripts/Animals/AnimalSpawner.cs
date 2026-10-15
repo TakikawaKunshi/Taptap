@@ -5,6 +5,7 @@ using UnityEngine;
 /// <summary>
 /// 动物投放器。对应策划案第八章"建议初始配置"里的动物部分：
 /// 青蛙、蚯蚓、蜗牛、蚂蚁、蜘蛛各一只，初始饱腹 2，分别落在湿格、隐蔽点等起始位置上。
+/// 默认在开局自动投放，也可关闭自动投放后通过 Inspector 菜单手动执行。
 ///
 /// 与 PlantSpawner 的分工不同：植物占格并由 TileMapManager 持有，
 /// 而动物会移动、不属于任何格子，所以它们统一由本组件登记在洞口一份列表里，
@@ -36,6 +37,10 @@ public class AnimalSpawner : MonoBehaviour
     [SerializeField, Tooltip("动物所在的地图；已经有格子后才能投放。")]
     private TileMapManager map;
 
+    [Header("开局初始化")]
+    [SerializeField, Tooltip("进入游戏后自动投放初始动物；需要空场或纯植物测试时取消勾选。")]
+    private bool spawnOnStart = true;
+
     [Header("初始配置")]
     [SerializeField, Tooltip("策划案第八章的开局配置：五种 MVP 动物各一只。")]
     private List<Placement> initialLayout = new List<Placement>
@@ -49,6 +54,14 @@ public class AnimalSpawner : MonoBehaviour
 
     private readonly List<AnimalsBase> animals = new List<AnimalsBase>();
     private int lastPlacedCount;
+    private bool hasSpawnedInitialLayout;
+
+    private void Start()
+    {
+        // 铺场入口会先初始化地图；手动提前铺场后不再自动重复执行。
+        if (spawnOnStart && !hasSpawnedInitialLayout)
+            SpawnInitialLayout();
+    }
 
     /// <summary>登记在案的存活动物。</summary>
     public IReadOnlyList<AnimalsBase> Animals => animals;
@@ -125,6 +138,7 @@ public class AnimalSpawner : MonoBehaviour
             }
         }
 
+        hasSpawnedInitialLayout = true;
         Debug.Log("AnimalSpawner：已投放 " + lastPlacedCount + " 只动物，跳过 " + skipped
                   + " 个（格子不存在或已有同种动物）。", this);
     }
@@ -134,6 +148,7 @@ public class AnimalSpawner : MonoBehaviour
     public void ClearAllAnimals()
     {
         animals.Clear();
+        hasSpawnedInitialLayout = false;
         lastPlacedCount = 0;
         Debug.Log("AnimalSpawner：已清空全部动物。", this);
     }

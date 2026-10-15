@@ -247,7 +247,7 @@ public static class QHTestSceneBuilder
 
         Report("QH Test 搭建完成", string.Format(
             "已刷 {0} 个格子（来源 Taki's Test，Tile={1}）。\n"
-            + "UI={2}\n\n下一步：选中 GameManager 上的 PlantSpawner，右键 → 铺设策划案初始配置。",
+            + "UI={2}\n\n下一步：进入 Play，植物和动物会自动按初始配置投放。",
             painted, tileName, canvas != null ? "UICanvas 已实例化并接线" : "未找到 UICanvas 预制体！"));
     }
 

@@ -62,14 +62,14 @@ public class QHTestScenePlayModeTests
     }
 
     [Test]
-    public void 铺设初始配置后植物进入地图()
+    public void 场景启动后自动铺设初始植物()
     {
         TileMapManager mapManager = Object.FindObjectOfType<TileMapManager>();
         PlantSpawner spawner = Object.FindObjectOfType<PlantSpawner>();
 
-        spawner.SpawnInitialLayout();
-
-        Assert.Greater(spawner.LastPlacedCount, 0, "策划案初始配置应当能在本场景铺下植物");
+        Assert.AreEqual(4, spawner.LastPlacedCount, "无需手动铺场，开局应自动生成 4 株植物");
+        Assert.IsTrue(mapManager.TryGetCell(new Vector2Int(1, 0), out TileCell detritusCell));
+        Assert.AreEqual(1, detritusCell.Detritus, "开局应只发放一份初始余屑");
 
         int mossCount = 0;
         int seedCount = 0;
@@ -220,12 +220,18 @@ public class QHTestScenePlayModeTests
     public void 重复铺场不会覆盖已有植物()
     {
         PlantSpawner spawner = Object.FindObjectOfType<PlantSpawner>();
-        spawner.SpawnInitialLayout();
         int first = spawner.LastPlacedCount;
+        Assert.IsTrue(spawner.Map.TryGetCell(new Vector2Int(1, 0), out TileCell cell));
+        int initialDetritus = cell.Detritus;
 
         spawner.SpawnInitialLayout();
         Assert.AreEqual(0, spawner.LastPlacedCount, "第二次铺场应全部跳过，不覆盖已有植物");
         Assert.Greater(first, 0);
+        Assert.AreEqual(initialDetritus, cell.Detritus, "重复铺场不应额外增加余屑");
+
+        cell.Detritus = 0;
+        spawner.SpawnInitialLayout();
+        Assert.AreEqual(0, cell.Detritus, "已消耗的初始余屑也不应被再次发放");
     }
 
     [Test]
@@ -242,6 +248,93 @@ public class QHTestScenePlayModeTests
             Assert.AreEqual(0, cell.Cover.Count, "清空后不应残留地表覆盖");
             Assert.AreEqual(0, cell.Detritus, "清空后不应残留余屑");
         }
+
+        spawner.SpawnInitialLayout();
+        Assert.AreEqual(4, spawner.LastPlacedCount, "清空后仍可手动重新铺场");
+        Assert.IsTrue(mapManager.TryGetCell(new Vector2Int(1, 0), out TileCell seededCell));
+        Assert.AreEqual(1, seededCell.Detritus, "重新铺场应恢复初始余屑");
+    }
+
+    [UnityTest]
+    public IEnumerator 重新启用组件不会再次自动铺场()
+    {
+        PlantSpawner plants = Object.FindObjectOfType<PlantSpawner>();
+        AnimalSpawner animals = Object.FindObjectOfType<AnimalSpawner>();
+        plants.ClearAllPlants();
+        animals.ClearAllAnimals();
+        plants.enabled = false;
+        animals.enabled = false;
+        yield return null;
+        plants.enabled = true;
+        animals.enabled = true;
+        yield return null;
+
+        AssertEmptyEcology(plants.Map, animals);
+    }
+
+    [UnityTest]
+    public IEnumerator 关闭开局投放后仍可手动铺场()
+    {
+        Object.FindObjectOfType<PlantSpawner>().ClearAllPlants();
+        Object.FindObjectOfType<AnimalSpawner>().ClearAllAnimals();
+        var host = new GameObject("Manual Spawner Test");
+        try
+        {
+            PlantSpawner plants = host.AddComponent<PlantSpawner>();
+            AnimalSpawner animals = host.AddComponent<AnimalSpawner>();
+            const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance
+                | System.Reflection.BindingFlags.NonPublic;
+            typeof(PlantSpawner).GetField("spawnOnStart", flags).SetValue(plants, false);
+            typeof(AnimalSpawner).GetField("spawnOnStart", flags).SetValue(animals, false);
+            yield return null;
+
+            AssertEmptyEcology(plants.Map, animals);
+            plants.SpawnInitialLayout();
+            animals.SpawnInitialLayout();
+            Assert.AreEqual(4, plants.LastPlacedCount);
+            Assert.AreEqual(5, animals.LiveCount);
+        }
+        finally
+        {
+            Object.Destroy(host);
+        }
+    }
+
+    [UnityTest]
+    public IEnumerator 启动前手动铺场不会再自动投放()
+    {
+        Object.FindObjectOfType<PlantSpawner>().ClearAllPlants();
+        Object.FindObjectOfType<AnimalSpawner>().ClearAllAnimals();
+        var host = new GameObject("Early Spawner Test");
+        try
+        {
+            PlantSpawner plants = host.AddComponent<PlantSpawner>();
+            AnimalSpawner animals = host.AddComponent<AnimalSpawner>();
+            plants.SpawnInitialLayout();
+            animals.SpawnInitialLayout();
+            yield return null;
+
+            Assert.AreEqual(4, plants.LastPlacedCount, "Start 不应再次铺场并覆盖上次投放结果");
+            Assert.AreEqual(5, animals.LastPlacedCount);
+            Assert.AreEqual(5, animals.LiveCount);
+            Assert.IsTrue(plants.Map.TryGetCell(new Vector2Int(1, 0), out TileCell cell));
+            Assert.AreEqual(1, cell.Detritus);
+        }
+        finally
+        {
+            Object.Destroy(host);
+        }
+    }
+
+    private static void AssertEmptyEcology(TileMapManager map, AnimalSpawner animals)
+    {
+        foreach (TileCell cell in map.Cells)
+        {
+            Assert.IsNull(cell.Subject);
+            Assert.AreEqual(0, cell.Cover.Count);
+            Assert.AreEqual(0, cell.Detritus);
+        }
+        Assert.AreEqual(0, animals.LiveCount);
     }
 
     private static System.Collections.Generic.IEnumerable<ICellEnv> CollectCells(TileMapManager mapManager)
