@@ -113,7 +113,7 @@ public class PlantSettlementOrderTests
         var mushroom = new Mushroom();
         PlantSettler.Place(mushroom, source);
 
-        // 先在雨天长到成熟，让它消耗本格余屑导致衰退条件恶化。
+        // 先推进一晚，让初始余屑与随后回收的余屑有不同的产生日期。
         var settler = new PlantSettler();
         settler.Settle(1, FakeWeather.Rain(1), map.Cells);
 
@@ -121,16 +121,20 @@ public class PlantSettlementOrderTests
         while (mushroom.Vitality > 0)
             mushroom.TakeBite(1);
 
-        settler.Settle(2, FakeWeather.Rain(1), map.Cells);
         Assert.IsTrue(mushroom.IsDead, "活力归零后应被回收");
         Assert.Greater(source.Detritus, 0, "回收应产出余屑");
 
-        // 回收产出的余屑足以让新蘑菇满足最低条件。
+        // 在回收余屑到期前利用它；初始余屑已到期，不给旧批次续期。
         var fresh = new Mushroom();
         PlantSettler.Place(fresh, source);
         int before = fresh.Vitality;
-        settler.Settle(3, FakeWeather.Rain(1), map.Cells);
+        settler.Settle(2, FakeWeather.Rain(1), map.Cells);
         Assert.AreEqual(before + 2, fresh.Vitality, "新蘑菇应能利用回收的余屑增长");
+        Assert.AreEqual(3, source.Detritus);
+        before = fresh.Vitality;
+        settler.Settle(3, FakeWeather.Rain(1), map.Cells);
+        Assert.AreEqual(0, source.Detritus);
+        Assert.AreEqual(before + 1, fresh.Vitality, "两天后回收余屑到期，蘑菇转为缓慢生长。");
     }
 
     /// <summary>

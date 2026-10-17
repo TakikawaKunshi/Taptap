@@ -303,12 +303,6 @@ public abstract class AnimalsBase
     /// </summary>
     protected virtual void ApplyPlan(AnimalSettlePlan plan, IAnimalWorld world, ICellEnv cell)
     {
-        if (plan.StarvedToDeath)
-        {
-            MarkDead();
-            return;
-        }
-
         // 策划案：每晚自然下降 1；成功进食后恢复 2，最高 3。
         satiety = Mathf.Clamp(satiety - SatietyDecayPerNight + plan.SatietyGain, 0, MaxSatiety);
 
@@ -344,6 +338,18 @@ public abstract class AnimalsBase
             : plan.AdvanceFailedNights
                 ? failedNights + 1
                 : failedNights;
+
+        // 以实际进食结果判断死亡，也覆盖追逐失败、搬运和逃跑等分支。
+        if (starvation >= MaxStarvation)
+        {
+            if (!plan.StarvedToDeath)
+                plan.Log(RulePrefix + ".STARVED", DisplayName + " 连续三晚未能进食，死亡并转为 "
+                    + RecycleAmount + " 份余屑。");
+            plan.StarvedToDeath = true;
+            plan.RecycleToDetritus = RecycleAmount;
+            cell.Detritus += RecycleAmount;
+            MarkDead();
+        }
     }
 
     /// <summary>原地停留，并记录一行可读的原因。本方法是纯读的，数值变化交给 ApplyPlan。</summary>

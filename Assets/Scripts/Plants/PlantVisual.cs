@@ -1,119 +1,119 @@
 using UnityEngine;
 
 /// <summary>
-/// 一株植物的占位可视化。
-///
-/// 为什么需要它：植物本体是纯逻辑对象，不挂在场景上，地图只持有它的引用。
-/// 数据层这样最干净，但测试时 Game 视图空空如也，规则对不对只能靠翻 Console。
-/// 这里把每株植物画成一张贴图：物种决定染色，进度决定大小，枯萎变灰半透明；
-/// 同时把 DescribeShort 写进物体名，Hierarchy 里能直接读到准确数值。
-///
-/// 临时用图换成正式美术资源时，只要在 Binder 上换贴图引用，本类一行都不用动。
+/// 将用户的植物预设体实例关联到逻辑对象，外观、动画及渲染排序由预设体自行定义。
+/// 种子植物可按阶段切换指定渲染器的图片；蘑菇按活力调整大小。
 /// </summary>
 [DisallowMultipleComponent]
-[RequireComponent(typeof(SpriteRenderer))]
 public class PlantVisual : MonoBehaviour
 {
-    private PlantsBase plant;
-    private SpriteRenderer spriteRenderer;
-    private bool isSubject;
+    [Header("种子植物阶段外观（裸子植物 / 被子植物）")]
+    [SerializeField, Tooltip("拖入显示植物主体的 SpriteRenderer，可位于子物体上。留空时仅自动选择层级中唯一的 SpriteRenderer。")]
+    private SpriteRenderer targetRenderer;
+    [SerializeField, InspectorName("种子 (Seed)")]
+    private Sprite seedSprite;
+    [SerializeField, InspectorName("幼芽 (Sprout)")]
+    private Sprite sproutSprite;
+    [SerializeField, InspectorName("幼株 (Seedling)")]
+    private Sprite seedlingSprite;
+    [SerializeField, InspectorName("成熟株 (Mature)")]
+    private Sprite matureSprite;
+    [SerializeField, InspectorName("巨型株 (Giant)"), Tooltip("仅在逻辑进入巨型阶段后显示；不改变成长条件、缩放或占地。")]
+    private Sprite giantSprite;
 
-    /// <summary>对应的植物逻辑对象；地图把它回收后 Binder 会销毁本物体。</summary>
-    public PlantsBase Plant
+    public PlantsBase Plant { get; private set; }
+    public GameObject SourcePrefab { get; private set; }
+    private Vector3 originalScale;
+    private SpriteRenderer initializedRenderer;
+    private Sprite defaultSprite;
+    private int warnedMissingStages;
+    private bool warnedMissingRenderer;
+
+    private Sprite FirstConfiguredSprite => seedSprite != null ? seedSprite
+        : sproutSprite != null ? sproutSprite
+        : seedlingSprite != null ? seedlingSprite
+        : matureSprite != null ? matureSprite : giantSprite;
+
+    public void Bind(PlantsBase target, GameObject sourcePrefab)
     {
-        get { return plant; }
-    }
-
-    /// <summary>
-    /// 绑定植物并应用一次外观。sprite 与排序层来自 Binder，所有植株共用。
-    /// </summary>
-    public void Bind(PlantsBase target, Sprite sprite, int sortingOrder, bool subject)
-    {
-        plant = target;
-        isSubject = subject;
-
-        if (spriteRenderer == null)
-            spriteRenderer = GetComponent<SpriteRenderer>();
-        spriteRenderer.sprite = sprite;
-        spriteRenderer.sortingOrder = sortingOrder;
+        Plant = target;
+        SourcePrefab = sourcePrefab;
+        originalScale = sourcePrefab != null ? sourcePrefab.transform.localScale : transform.localScale;
         Refresh();
     }
 
-    /// <summary>按当前逻辑状态刷新外观。只读植物状态，不反过来改它。</summary>
-    public void Refresh()
+    /// <summary>只读逻辑状态：种子植物按阶段换图，蘑菇从原始缩放计算大小，避免累乘。</summary>
+    public void Refresh(int mushroomReferenceVitality = 5)
     {
-        if (plant == null || spriteRenderer == null || spriteRenderer.sprite == null)
+        if (Plant == null)
             return;
-
-        gameObject.name = plant.DescribeShort();
-        spriteRenderer.color = ResolveColor();
-
-        float size = ResolveSize();
-        Vector2 aspect = SpriteAspect();
-        transform.localScale = new Vector3(size * aspect.x, size * aspect.y, 1f);
+        gameObject.name = Plant.DescribeShort();
+        if (Plant is Mushroom mushroom)
+            transform.localScale = originalScale * Mathf.Sqrt(
+                Mathf.Max(0, mushroom.Vitality) / (float)Mathf.Max(1, mushroomReferenceVitality));
+        else if (Plant is SeedPlantsBase seed)
+            RefreshSeedSprite(seed);
     }
 
-    /// <summary>主体植物画大一点；地表覆盖层再缩小，避免盖住主体。</summary>
-    private float ResolveSize()
+    private void RefreshSeedSprite(SeedPlantsBase seed)
     {
-        float size;
+        // 全部留空表示沿用预设体原有外观，兼容已有植物和自定义动画。
+        if (FirstConfiguredSprite == null)
+            return;
 
-        SporePlantsBase spore = plant as SporePlantsBase;
-        if (spore != null)
+        if (targetRenderer == null)
         {
-            // 孢子植物的进度就是活力：0 点几乎看不见，5 点接近一整格。
-            size = 0.28f + Mathf.Max(0, Mathf.Min(spore.Vitality, 5)) * 0.08f;
+            SpriteRenderer[] renderers = GetComponentsInChildren<SpriteRenderer>(true);
+            if (renderers.Length == 1)
+                targetRenderer = renderers[0];
+            else
+            {
+                if (!warnedMissingRenderer)
+                    Debug.LogWarning("PlantVisual：" + name
+                        + " 已配置阶段图片，请在 Target Renderer 中指定植物主体的 SpriteRenderer。", this);
+                warnedMissingRenderer = true;
+                return;
+            }
+        }
+
+        warnedMissingRenderer = false;
+        if (initializedRenderer != targetRenderer)
+        {
+            initializedRenderer = targetRenderer;
+            // 在第一次换图前保存默认图片，缺图时不能误用上一阶段的图片作为默认值。
+            defaultSprite = targetRenderer.sprite;
+            warnedMissingStages = 0;
+        }
+
+        Sprite sprite = SpriteForStage(seed.Stage);
+        int stageBit = 1 << (int)seed.Stage;
+        if (sprite == null)
+        {
+            sprite = defaultSprite != null ? defaultSprite : FirstConfiguredSprite;
+            if ((warnedMissingStages & stageBit) == 0)
+                Debug.LogWarning("PlantVisual：" + name + " 未配置" + seed.StageName
+                    + "阶段图片，使用默认图片（默认图片为空时使用首个已配置的阶段图片）。", this);
+            warnedMissingStages |= stageBit;
         }
         else
         {
-            SeedPlantsBase seed = plant as SeedPlantsBase;
-            if (seed != null)
-            {
-                switch (seed.Stage)
-                {
-                    case E_PlantStage.Seed: size = 0.22f; break;
-                    case E_PlantStage.Sprout: size = 0.34f; break;
-                    case E_PlantStage.Seedling: size = 0.48f; break;
-                    case E_PlantStage.Mature: size = 0.62f; break;
-                    case E_PlantStage.Giant: size = 0.85f; break;
-                    default: size = 0.4f; break;
-                }
-            }
-            else
-            {
-                size = 0.4f;
-            }
+            warnedMissingStages &= ~stageBit;
         }
 
-        return isSubject ? size : size * 0.62f;
+        if (targetRenderer.sprite != sprite)
+            targetRenderer.sprite = sprite;
     }
 
-    /// <summary>临时图是人形插画，按物种染色才能一眼分清；枯萎统一灰掉。</summary>
-    private Color ResolveColor()
+    private Sprite SpriteForStage(E_PlantStage stage)
     {
-        if (plant.IsDead)
-            return new Color(0.3f, 0.3f, 0.3f, 0f);
-        if (plant.IsWithering)
-            return new Color(0.5f, 0.5f, 0.5f, 0.55f);
-
-        switch (plant.Species)
+        switch (stage)
         {
-            case E_PlantSpecies.Algae: return new Color(0.55f, 1f, 0.9f);
-            case E_PlantSpecies.Moss: return new Color(0.6f, 1f, 0.55f);
-            case E_PlantSpecies.Mushroom: return new Color(1f, 0.78f, 0.55f);
-            case E_PlantSpecies.Gymnosperm: return new Color(0.55f, 0.85f, 1f);
-            case E_PlantSpecies.Angiosperm: return new Color(1f, 0.65f, 0.85f);
-            default: return Color.white;
+            case E_PlantStage.Seed: return seedSprite;
+            case E_PlantStage.Sprout: return sproutSprite;
+            case E_PlantStage.Seedling: return seedlingSprite;
+            case E_PlantStage.Mature: return matureSprite;
+            case E_PlantStage.Giant: return giantSprite;
+            default: return null;
         }
-    }
-
-    /// <summary>贴图不是正方形时按长边归一，避免拉伸变形。</summary>
-    private Vector2 SpriteAspect()
-    {
-        Rect rect = spriteRenderer.sprite.rect;
-        float longer = Mathf.Max(rect.width, rect.height);
-        if (longer <= 0f)
-            return Vector2.one;
-        return new Vector2(rect.width / longer, rect.height / longer);
     }
 }

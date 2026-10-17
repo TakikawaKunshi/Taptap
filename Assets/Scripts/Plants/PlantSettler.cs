@@ -105,10 +105,24 @@ public sealed class PlantSettleReport
 /// 植物结算编排器。
 /// 策划案要求"同一资源点每晚只允许一份资源被预留，竞争由固定规则裁决，不按对象遍历顺序偷偷决定赢家"，
 /// 因此这里分成三步：按固定顺序收集植物、只读地收集全部提案、按顺序裁决并提交。
-/// 固定顺序沿用 TileMapManager 的既有做法：先比到中心的距离，再比坐标，保证结果可复现。
+/// 固定顺序沿用 TileMapManager 的既有做法：先比到中心的距离，再比坐标。
+/// 每次扩张随机选择可用邻格；固定随机种子时，结果仍不受传入格子的遍历顺序影响。
 /// </summary>
 public sealed class PlantSettler
 {
+    private readonly System.Random expansionRandom;
+
+    public PlantSettler()
+    {
+        expansionRandom = new System.Random();
+    }
+
+    /// <summary>指定随机种子，便于重现同一条扩张路径。</summary>
+    public PlantSettler(int randomSeed)
+    {
+        expansionRandom = new System.Random(randomSeed);
+    }
+
     /// <summary>收集全部格子，按固定顺序返回，便于结算结果可复现。</summary>
     public static List<ICellEnv> CollectInFixedOrder(IEnumerable<ICellEnv> cells)
     {
@@ -154,6 +168,7 @@ public sealed class PlantSettler
         report.Day = day;
 
         List<ICellEnv> ordered = CollectInFixedOrder(cells);
+        DetritusLifecycle.SettleCells(day, ordered, report.Logs);
         var proposals = CollectProposals(ordered, day, weather);
 
         ResolveExpansion(proposals, ordered, day, report);
@@ -174,6 +189,7 @@ public sealed class PlantSettler
             throw new ArgumentNullException(nameof(cell));
 
         var single = new List<ICellEnv> { cell };
+        DetritusLifecycle.SettleCells(day, single, report.Logs);
         List<Proposal> proposals = CollectProposals(single, day, weather);
         ResolveExpansion(proposals, single, day, report);
         CommitAll(proposals, day, report);
@@ -211,7 +227,7 @@ public sealed class PlantSettler
         if (!CanOccupy(cell, plant.OccupancySlot))
             return false;
 
-        plant.PlaceAt(cell.Coordinates);
+        plant.PlaceAt(cell);
         // 策划案：占位方式由物种自己声明，不能按"孢子／种子"的基类二分。
         // 苔藓与藻类是地表覆盖，可与主体共存；蘑菇和成熟种子植物占主体格。
         return plant.OccupancySlot == E_OccupancySlot.Subject
@@ -283,8 +299,8 @@ public sealed class PlantSettler
 
     /// <summary>
     /// 第二步：裁决扩张竞争。
-    /// 苔藓只提出"我想扩张"，具体落在哪一格由这里决定：按提案顺序取第一个仍可占用的邻格。
-    /// 被占满时拒绝该提案，并记录原因，保证与提案顺序无关且可复现。
+    /// 苔藓只提出"我想扩张"，这里按固定提案顺序处理，每次从仍可占用的邻格中等概率随机选一格。
+    /// 被占满时拒绝该提案，并记录原因；同一随机种子下不受传入格子的遍历顺序影响。
     /// </summary>
     private void ResolveExpansion(List<Proposal> proposals, List<ICellEnv> cells, int day, PlantSettleReport report)
     {
@@ -323,19 +339,20 @@ public sealed class PlantSettler
         }
     }
 
-    /// <summary>按邻格的固定顺序取第一个可占用且未被本晚预留的格子。</summary>
-    private static ICellEnv FindExpansionTarget(ICellEnv cell, HashSet<ICellEnv> reserved)
+    /// <summary>每次从可占用且未被本晚预留的邻格中等概率随机选择，避免偏向固定方向。</summary>
+    private ICellEnv FindExpansionTarget(ICellEnv cell, HashSet<ICellEnv> reserved)
     {
+        var candidates = new List<ICellEnv>(4);
         IReadOnlyList<ICellEnv> neighbors = cell.Neighbors;
         for (int i = 0; i < neighbors.Count; i++)
         {
             ICellEnv neighbor = neighbors[i];
             if (neighbor == null || !neighbor.CanOccupy || reserved.Contains(neighbor))
                 continue;
-            return neighbor;
+            candidates.Add(neighbor);
         }
 
-        return null;
+        return candidates.Count > 0 ? candidates[expansionRandom.Next(candidates.Count)] : null;
     }
 
     /// <summary>第三步：按固定顺序提交，保证同一晚的累计结果不受遍历顺序影响。</summary>

@@ -136,7 +136,7 @@ public static class QHTestSceneVerifier
         report.Append("SpeciesList: ").Append(speciesList == null ? "缺失"
             : "卡片预制体=" + (speciesList.PreSpeciesCard != null ? "已绑定" : "未绑定")).Append('\n');
 
-        // ---- 5. 植物占位可视化：没有它地图上看不到任何植物 ----
+        // ---- 5. 植物预设体配置 ----
         PlantVisualBinder binder = Object.FindObjectOfType<PlantVisualBinder>();
         if (binder == null)
         {
@@ -144,12 +144,13 @@ public static class QHTestSceneVerifier
         }
         else
         {
-            report.Append("PlantVisualBinder: 已挂载，贴图=").Append(HasReference(binder, "plantTexture") ? "已绑定" : "未绑定")
+            report.Append("PlantVisualBinder: 已挂载，预设体=").Append(CountPrefabs<E_PlantSpecies>(binder.GetPrefab))
+                  .Append('/').Append(System.Enum.GetValues(typeof(E_PlantSpecies)).Length)
                   .Append("，map=").Append(HasReference(binder, "map") ? "已绑定" : "未绑定")
                   .Append("，bridge=").Append(HasReference(binder, "bridge") ? "已绑定" : "未绑定").Append('\n');
         }
 
-        // ---- 6. 动物系统：投放器、结算桥接、占位可视化 ----
+        // ---- 6. 动物系统：投放器、结算桥接、预设体配置 ----
         AnimalSpawner animalSpawner = Object.FindObjectOfType<AnimalSpawner>();
         report.Append("AnimalSpawner: ").Append(animalSpawner != null
             ? "已挂载，map=" + (HasReference(animalSpawner, "map") ? "已绑定" : "未绑定")
@@ -171,13 +172,27 @@ public static class QHTestSceneVerifier
 
         AnimalVisualBinder animalBinder = Object.FindObjectOfType<AnimalVisualBinder>();
         report.Append("AnimalVisualBinder: ").Append(animalBinder != null
-            ? "已挂载，贴图=" + (HasReference(animalBinder, "animalTexture") ? "已绑定" : "未绑定")
+            ? "已挂载，预设体=" + CountPrefabs<E_AnimalSpecies>(animalBinder.GetPrefab)
+              + "/" + System.Enum.GetValues(typeof(E_AnimalSpecies)).Length
               + "，spawner=" + (HasReference(animalBinder, "spawner") ? "已绑定" : "未绑定")
             : "缺失").Append('\n');
+
+        report.Append("未绑定预设体的物种不创建显示物体，逻辑仍正常运行。\n");
 
         // 播放模式下的铺场与七天结算在 PlayMode 测试里做，这里不重复。
 
         Debug.Log("[QHTestSceneVerifier]\n" + report);
+    }
+
+    private static int CountPrefabs<T>(System.Func<T, GameObject> getPrefab) where T : struct
+    {
+        int count = 0;
+        foreach (T species in System.Enum.GetValues(typeof(T)))
+        {
+            if (getPrefab(species) != null)
+                count++;
+        }
+        return count;
     }
 
     /// <summary>读取 [SerializeField] 私有字段是否已经拖过引用。</summary>

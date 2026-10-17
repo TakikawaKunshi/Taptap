@@ -4,7 +4,7 @@ using UnityEngine;
 /// <summary>
 /// 孢子植物基类。策划案规定孢子植物不使用根、茎、叶数据，只保留
 /// 活力值、扩张值、附着地块、产出冷却四个字段。
-/// 雨天增长、晴天衰减；活力归零时不立即消失，先进入枯萎阶段，下一次结算才转为余屑。
+/// 雨天增长、晴天衰减；默认枯萎后下一晚回收，蘑菇可覆写为活力归零立即回收。
 /// 每晚的增长与衰减都套用策划案给出的上限，避免一天满屏爆发或全部清空。
 /// </summary>
 [Serializable]
@@ -70,6 +70,8 @@ public abstract class SporePlantsBase : PlantsBase
 
     /// <summary>枯萎回收时产出的余屑份数。</summary>
     protected abstract int RecycleAmount { get; }
+
+    protected virtual bool RecycleImmediatelyWhenDepleted => false;
 
     /// <summary>
     /// 投放时的初始活力。策划案第八章要求雨眠苔投放即为"成熟"、小蘑菇为"幼体"，
@@ -152,10 +154,30 @@ public abstract class SporePlantsBase : PlantsBase
         // 活力归零不在只读阶段判断：只有写回之后才知道本晚的结果。
         if (vitality == 0 && !IsWithering)
         {
-            MarkWithering();
-            plan.Log(RulePrefix + ".WITHER",
-                DisplayName + " 活力归零，进入枯萎，下一晚回收成余屑。");
+            if (TryRecycleDepleted())
+            {
+                plan.RecycleToDetritus = RecycleAmount;
+                plan.Log(RulePrefix + ".RECYCLE",
+                    DisplayName + " 活力归零，立即回收为 " + RecycleAmount + " 份余屑。");
+            }
+            else
+            {
+                MarkWithering();
+                plan.Log(RulePrefix + ".WITHER",
+                    DisplayName + " 活力归零，进入枯萎，下一晚回收成余屑。");
+            }
         }
+    }
+
+    private bool TryRecycleDepleted()
+    {
+        if (!RecycleImmediatelyWhenDepleted || vitality > 0 || IsDead || CurrentCell == null)
+            return false;
+
+        CurrentCell.Detritus += RecycleAmount;
+        MarkDead();
+        CurrentCell.Release(this);
+        return true;
     }
 
     /// <summary>各物种自己的数值规则，只有满足最低条件时才会被调用。</summary>
@@ -170,11 +192,11 @@ public abstract class SporePlantsBase : PlantsBase
     /// </summary>
     public override bool TakeBite(int amount)
     {
-        if (amount <= 0 || vitality <= 0)
+        if (amount <= 0 || vitality <= 0 || IsDead)
             return false;
 
         vitality = Mathf.Max(0, vitality - amount);
-        if (vitality == 0 && !IsWithering)
+        if (vitality == 0 && !IsWithering && !TryRecycleDepleted())
             MarkWithering();
         NotifyChanged();
         return true;

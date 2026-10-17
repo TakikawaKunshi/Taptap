@@ -64,12 +64,6 @@ public static class QHTestSceneBuilder
     /// <summary>Taki's Test 里整套 HUD 用的预制体；QH Test 直接实例化同一份。</summary>
     private const string UiCanvasPrefabPath = "Assets/Prefabs/UI/UICanvas.prefab";
 
-    /// <summary>植物占位可视化的临时贴图；换正式美术时替换这一张即可。</summary>
-    private const string PlantTexturePath = "Assets/Art/Plants/danie.jpg";
-
-    /// <summary>动物占位可视化的临时贴图；换正式美术时替换这一张即可。</summary>
-    private const string AnimalTexturePath = "Assets/Art/Animals/Frieren.jpg";
-
     /// <summary>策划案第八章建议的 12x12 灰盒规模；这里用它限制铺设范围。</summary>
     private const int HalfWidth = 12;
     private const int HalfHeight = 8;
@@ -177,22 +171,15 @@ public static class QHTestSceneBuilder
         SetObjectReference(bridge, "weather", weather);
         SetObjectReference(bridge, "map", mapManager);
 
-        // ---- 植物占位可视化：植物是纯逻辑对象，靠这里画到地图上 ----
-        // 挂在 Species（有 FacingCamera）下面，方块会自动跟着相机转向。
+        // ---- 植物可视化：预设体由用户在 Inspector 中按物种配置，留空不显示 ----
         PlantVisualBinder plantBinder = speciesRoot.AddComponent<PlantVisualBinder>();
         SetObjectReference(plantBinder, "map", mapManager);
         SetObjectReference(plantBinder, "bridge", bridge);
-        SetObjectReference(plantBinder, "plantTexture", EnsurePlantTextureReadable());
-        // Taki 的场景与 Renderer2D 都在用 URP 的 Sprite-Lit-Default；AddComponent 的默认材质会粉红。
-        Material spriteLit = AssetDatabase.LoadAssetAtPath<Material>(
-            "Packages/com.unity.render-pipelines.universal/Runtime/Materials/Sprite-Lit-Default.mat");
-        if (spriteLit != null)
-            SetObjectReference(plantBinder, "spriteMaterial", spriteLit);
 
         // ---- 动物：不占格子，登记在 Animals 根物体下的投放器里 ----
         GameObject animalsRoot = new GameObject("Animals");
         animalsRoot.transform.SetParent(gridObject.transform, false);
-        // 与 Species 一样需要朝向相机：占位贴图是平面精灵，相机斜视时不转向就几乎看不见。
+        // 与 Species 一样朝向相机，便于使用平面精灵预设体。
         animalsRoot.AddComponent<FacingCamera>();
 
         AnimalSpawner animalSpawner = animalsRoot.AddComponent<AnimalSpawner>();
@@ -200,10 +187,6 @@ public static class QHTestSceneBuilder
 
         AnimalVisualBinder animalBinder = animalsRoot.AddComponent<AnimalVisualBinder>();
         SetObjectReference(animalBinder, "spawner", animalSpawner);
-        SetObjectReference(animalBinder, "plantBridge", bridge);
-        SetObjectReference(animalBinder, "animalTexture", EnsureTextureReadable(AnimalTexturePath));
-        if (spriteLit != null)
-            SetObjectReference(animalBinder, "spriteMaterial", spriteLit);
 
         // ---- 动物结算桥接：挂在植物结算之后运行（策划案第 6 至 8 步）----
         AnimalSettlementBridge animalBridge = gameManager.AddComponent<AnimalSettlementBridge>();
@@ -215,7 +198,7 @@ public static class QHTestSceneBuilder
 
         // ---- UI：实例化 Taki's Test 使用的同一份 UICanvas 预制体 ----
         GameObject canvas = InstantiateUiCanvas();
-        BindUiReferences(canvas, timeManager, weatherObject, mapManager, camera, speciesRoot);
+        BindUiReferences(canvas, timeManager, weatherObject, mapManager, camera, plantBinder, animalBinder);
 
         MessagePanel messagePanel = EnsureMessagePanel(canvas);
         if (messagePanel != null)
@@ -282,7 +265,8 @@ public static class QHTestSceneBuilder
     /// 所以必须在这里补，否则 HUD 打开就全是警告。
     /// </summary>
     private static void BindUiReferences(GameObject canvas, TimeManager timeManager,
-        GameObject weatherObject, TileMapManager mapManager, Camera camera, GameObject speciesRoot)
+        GameObject weatherObject, TileMapManager mapManager, Camera camera,
+        PlantVisualBinder plantBinder, AnimalVisualBinder animalBinder)
     {
         if (canvas == null)
             return;
@@ -300,7 +284,8 @@ public static class QHTestSceneBuilder
             SetObjectReference(speciesList, "timeManager", timeManager);
             SetObjectReference(speciesList, "environment", mapManager);
             SetObjectReference(speciesList, "placementCamera", camera);
-            SetObjectReference(speciesList, "speciesParent", speciesRoot != null ? speciesRoot.transform : null);
+            SetObjectReference(speciesList, "plantVisualBinder", plantBinder);
+            SetObjectReference(speciesList, "animalVisualBinder", animalBinder);
         }
 
         NightSettleButton settleButton = canvas.GetComponentInChildren<NightSettleButton>(true);
@@ -474,37 +459,6 @@ public static class QHTestSceneBuilder
 
         property.colorValue = value;
         serialized.ApplyModifiedPropertiesWithoutUndo();
-    }
-
-    /// <summary>
-    /// 确保占位贴图开了 Read/Write：可视化组件要用 GetPixels 裁出方形。
-    /// 首次运行会触发一次重导入，之后直接返回已加载的贴图。
-    /// 植物与动物的贴图共用这条通道。
-    /// </summary>
-    private static Texture2D EnsureTextureReadable(string texturePath)
-    {
-        TextureImporter importer = AssetImporter.GetAtPath(texturePath) as TextureImporter;
-        if (importer == null)
-        {
-            Debug.LogWarning("[QHTestSceneBuilder] 找不到占位贴图：" + texturePath
-                             + "，对应的生物将不可见（逻辑仍正常结算）。");
-            return null;
-        }
-
-        if (!importer.isReadable || importer.mipmapEnabled)
-        {
-            importer.isReadable = true;
-            importer.mipmapEnabled = false;
-            importer.SaveAndReimport();
-        }
-
-        return AssetDatabase.LoadAssetAtPath<Texture2D>(texturePath);
-    }
-
-    /// <summary>植物占位贴图的便捷入口。</summary>
-    private static Texture2D EnsurePlantTextureReadable()
-    {
-        return EnsureTextureReadable(PlantTexturePath);
     }
 
     /// <summary>按名字递归查找子物体；UI 层级很深，直接 Find 容易漏。</summary>

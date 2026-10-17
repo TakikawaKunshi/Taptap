@@ -4,7 +4,14 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
-/// <summary>列表和卡片共用的物种配置；每张卡片独立保存当天剩余数量。</summary>
+public enum SpeciesKind
+{
+    [InspectorName("未配置")] None,
+    [InspectorName("植物")] Plant,
+    [InspectorName("动物")] Animal
+}
+
+/// <summary>卡片选择逻辑物种，外观由场景中的 Visual Binder 配置。</summary>
 [Serializable]
 public struct SpeciesInfo
 {
@@ -12,8 +19,13 @@ public struct SpeciesInfo
     public string Name;
     [TextArea(2, 5)] public string Description;
     [Min(0)] public int DailyCount;
-    [Tooltip("投放到环境中的物种预设体，不是 UI 卡片预设体。")]
-    public GameObject Prefab;
+    public SpeciesKind Kind;
+    public E_PlantSpecies PlantSpecies;
+    public E_AnimalSpecies AnimalSpecies;
+
+    public bool IsConfigured => Kind == SpeciesKind.Plant
+        ? Enum.IsDefined(typeof(E_PlantSpecies), PlantSpecies)
+        : Kind == SpeciesKind.Animal && AnimalSettler.IsSupported(AnimalSpecies);
 }
 
 /// <summary>生态工具投放匣：按配置顺序生成卡片，并管理纵向滚动布局。</summary>
@@ -40,8 +52,10 @@ public class SpeciesList : MonoBehaviour, IScrollHandler
     private TileMapManager environment;
     [SerializeField, Tooltip("留空使用 MainCamera。")]
     private Camera placementCamera;
-    [SerializeField, Tooltip("生成物种的父物体：与 Tilemap 同级且挂有 FacingCamera。留空时自动查找；有多个候选时请手动指定。")]
-    private Transform speciesParent;
+    [SerializeField, Tooltip("植物外观配置；留空时查找管理同一地图的唯一 Binder。")]
+    private PlantVisualBinder plantVisualBinder;
+    [SerializeField, Tooltip("动物外观与登记表；留空时查找管理同一地图的唯一 Binder。")]
+    private AnimalVisualBinder animalVisualBinder;
 
     private readonly List<SpeciesCard> cards = new List<SpeciesCard>();
     private bool initialized;
@@ -80,15 +94,57 @@ public class SpeciesList : MonoBehaviour, IScrollHandler
         {
             SpeciesCard card = Instantiate(PreSpeciesCard, SpeciesScroll.content, false);
             card.transform.SetAsLastSibling();
-            card.Initialize(info, timeManager, environment, placementCamera, speciesParent);
+            card.Initialize(info, timeManager, environment, placementCamera, plantVisualBinder, animalVisualBinder);
             card.gameObject.SetActive(true);
             cards.Add(card);
         }
         initialized = true;
-        Canvas.ForceUpdateCanvases();
-        LayoutRebuilder.ForceRebuildLayoutImmediate(SpeciesScroll.content);
+        RefreshLayout();
         SpeciesScroll.StopMovement();
         SpeciesScroll.verticalNormalizedPosition = 1f;
+    }
+
+    /// <summary>按预设体尺寸刷新已有卡片，不重新生成卡片或重置投放数量。</summary>
+    [ContextMenu("刷新卡片布局")]
+    public void RefreshLayout()
+    {
+        if (!initialized || PreSpeciesCard == null || SpeciesScroll == null || SpeciesScroll.content == null)
+            return;
+
+        float scrollPosition = SpeciesScroll.verticalNormalizedPosition;
+        ConfigureLayout();
+        float height = GetPrefabCardHeight();
+        foreach (SpeciesCard card in cards)
+        {
+            if (card == null)
+                continue;
+            LayoutElement element = card.GetComponent<LayoutElement>();
+            if (element == null)
+                element = card.gameObject.AddComponent<LayoutElement>();
+            element.minHeight = height;
+            element.preferredHeight = height;
+            element.flexibleHeight = 0f;
+        }
+
+        // 只重建当前列表，ContentSizeFitter 据此更新滚动范围。
+        LayoutRebuilder.ForceRebuildLayoutImmediate(SpeciesScroll.content);
+        SpeciesScroll.verticalNormalizedPosition = scrollPosition;
+    }
+
+    private float GetPrefabCardHeight()
+    {
+        var cardRect = (RectTransform)PreSpeciesCard.transform;
+        float height = Mathf.Max(1f, cardRect.rect.height, LayoutUtility.GetPreferredHeight(cardRect));
+        RectTransform background = cardRect.Find("BackGround") as RectTransform;
+        if (background != null)
+        {
+            // 美术可能只调整背景：根节点仍为 100 时，150 高的背景也必须完整占位。
+            // 使用卡片局部坐标，兼容背景偏移与缩放；不修改预设体本身。
+            Bounds bounds = RectTransformUtility.CalculateRelativeRectTransformBounds(cardRect, background);
+            float visibleHeight = bounds.size.y + 2f * Mathf.Abs(bounds.center.y - cardRect.rect.center.y);
+            height = Mathf.Max(height, visibleHeight);
+        }
+        return height;
     }
 
     private void ConfigureLayout()
@@ -104,7 +160,8 @@ public class SpeciesList : MonoBehaviour, IScrollHandler
             layout = content.gameObject.AddComponent<VerticalLayoutGroup>();
         layout.childAlignment = TextAnchor.UpperCenter;
         layout.childControlWidth = true;
-        layout.childControlHeight = false;
+        layout.childControlHeight = true;
+        layout.childScaleHeight = true;
         layout.childForceExpandWidth = true;
         layout.childForceExpandHeight = false;
         layout.spacing = Mathf.Max(0f, verticalSpacing);
@@ -136,6 +193,6 @@ public class SpeciesList : MonoBehaviour, IScrollHandler
     private void LateUpdate()
     {
         if (initialized && layoutDirty && SpeciesScroll != null && SpeciesScroll.content != null)
-            ConfigureLayout();
+            RefreshLayout();
     }
 }

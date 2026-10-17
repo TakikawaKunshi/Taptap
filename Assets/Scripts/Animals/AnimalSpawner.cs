@@ -19,7 +19,7 @@ public class AnimalSpawner : MonoBehaviour
         [Tooltip("相对地图中心的整数格坐标。")]
         public Vector2Int coordinates;
 
-        [Tooltip("投放的物种；首版只支持 MVP 五种。")]
+        [Tooltip("支持青蛙、蚯蚓、蜗牛、蚂蚁、蜘蛛和奶蛙（MilkFrog）。")]
         public E_AnimalSpecies species;
 
         [Tooltip("初始饱腹，策划案建议 2。")]
@@ -141,6 +141,22 @@ public class AnimalSpawner : MonoBehaviour
         hasSpawnedInitialLayout = true;
         Debug.Log("AnimalSpawner：已投放 " + lastPlacedCount + " 只动物，跳过 " + skipped
                   + " 个（格子不存在或已有同种动物）。", this);
+    }
+
+    /// <summary>手动投放一只动物并登记到结算使用的同一列表；不会重新铺设初始布局。</summary>
+    public bool TrySpawn(E_AnimalSpecies species, TileCell cell, out AnimalsBase animal)
+    {
+        animal = null;
+        TileMapManager manager = Map;
+        if (manager == null || cell == null || cell.Manager != manager
+            || !manager.TryGetCellAtTilemapPosition(cell.TilemapPosition, out TileCell registered)
+            || registered != cell || !AnimalSettler.IsSupported(species))
+            return false;
+
+        animal = AnimalSettler.Create(species);
+        AnimalSettler.Place(animal, cell);
+        animals.Add(animal);
+        return true;
     }
 
     /// <summary>清空全部动物，回到开局状态；用于反复验证七天流程。</summary>

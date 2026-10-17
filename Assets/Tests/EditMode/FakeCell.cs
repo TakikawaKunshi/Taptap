@@ -2,9 +2,10 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>测试用的固定格子。记录余屑的写入并提供固定顺序的四邻接。</summary>
-public class FakeCell : ICellEnv
+public class FakeCell : ICellEnv, IDetritusLifecycle
 {
     private readonly List<PlantsBase> cover = new List<PlantsBase>();
+    private readonly DetritusLifecycle detritus = new DetritusLifecycle();
 
     public FakeCell(Vector2Int coordinates, bool isWet, int detritus = 0,
         E_SurfaceKind surface = E_SurfaceKind.Ground, bool isShaded = false)
@@ -20,7 +21,9 @@ public class FakeCell : ICellEnv
 
     public bool IsWet { get; set; }
 
-    public int Detritus { get; set; }
+    public int Detritus { get => detritus.Amount; set => detritus.SetAmount(value); }
+
+    public int AdvanceDetritusDay(int day) => detritus.AdvanceDay(day);
 
     public E_SurfaceKind Surface { get; set; }
 

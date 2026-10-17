@@ -102,18 +102,55 @@ public class PlantSettlerTests
     // ============================================================
 
     [Test]
-    public void 雨天苔藓扩张到固定顺序的第一个空格()
+    public void 雨天苔藓每次扩张重新随机选择相邻空格()
     {
         FakeMap map = Build3x3();
-        PlantSettler.Place(new Moss(), map.Get(Vector2Int.zero));
+        FakeCell origin = map.Get(Vector2Int.zero);
+        var moss = new Moss();
+        PlantSettler.Place(moss, origin);
+        var directions = new HashSet<Vector2Int>();
 
-        var settler = new PlantSettler();
-        PlantSettleReport report = settler.Settle(1, FakeWeather.Rain(1), map.Cells);
+        var settler = new PlantSettler(12345);
+        for (int day = 1; day <= 32; day++)
+        {
+            PlantSettleReport report = settler.SettleCell(day, FakeWeather.Rain(1), origin);
 
-        Assert.AreEqual(1, report.NewGrowths.Count, "策划案：雨天向 1 个相邻空地扩张");
-        Assert.AreEqual(0, report.ExpansionRejected);
-        Assert.AreEqual(1, map.Get(new Vector2Int(0, -1)).Cover.Count, "邻接顺序为下右上左，应先占下方");
-        Assert.AreEqual(0, map.Get(new Vector2Int(1, 0)).Cover.Count);
+            Assert.AreEqual(1, report.NewGrowths.Count, "每次只向一个相邻空地扩张");
+            Assert.AreEqual(0, report.ExpansionRejected);
+            PlantsBase growth = report.NewGrowths[0];
+            Assert.AreEqual(1, Mathf.Abs(growth.Coordinates.x) + Mathf.Abs(growth.Coordinates.y),
+                "只能扩张到四邻格，不能跨格或斜向扩张");
+            directions.Add(growth.Coordinates);
+            // 恢复相同的四个候选格，验证同一株苔藓每晚都会重新选择方向。
+            map.Get(growth.Coordinates).Release(growth);
+        }
+
+        Assert.AreEqual(4, directions.Count, "固定种子的多次扩张应覆盖四个方向，不再一直优先向下");
+        Assert.AreEqual(32, moss.Expansion);
+    }
+
+    [Test]
+    public void 随机扩张只在未被主体或覆盖占用的邻格中选择()
+    {
+        FakeMap map = Build3x3();
+        FakeCell origin = map.Get(Vector2Int.zero);
+        PlantSettler.Place(new Moss(), origin);
+        PlantSettler.Place(new Gymnosperm(), map.Get(Vector2Int.down));
+        PlantSettler.Place(new Algae(), map.Get(Vector2Int.right));
+        var directions = new HashSet<Vector2Int>();
+        var settler = new PlantSettler(12345);
+
+        for (int day = 1; day <= 32; day++)
+        {
+            PlantSettleReport report = settler.SettleCell(day, FakeWeather.Rain(1), origin);
+            Assert.AreEqual(1, report.NewGrowths.Count, "有可用邻格就应扩张，不因随机选到障碍而跳过");
+            PlantsBase growth = report.NewGrowths[0];
+            Assert.IsTrue(growth.Coordinates == Vector2Int.up || growth.Coordinates == Vector2Int.left);
+            directions.Add(growth.Coordinates);
+            map.Get(growth.Coordinates).Release(growth);
+        }
+
+        Assert.AreEqual(2, directions.Count, "两个可用方向都应能被选中");
     }
 
     [Test]
@@ -274,7 +311,7 @@ public class PlantSettlerTests
             var random = new System.Random(run * 7919 + 13);
             List<FakeCell> shuffled = map.Shuffled(random);
 
-            var settler = new PlantSettler();
+            var settler = new PlantSettler(12345);
             settler.Settle(1, FakeWeather.Rain(1), shuffled);
 
             var occupied = new HashSet<Vector2Int>();
@@ -310,15 +347,18 @@ public class PlantSettlerTests
         Moss moss = new Moss();
         PlantSettler.Place(moss, cell);
 
-        while (moss.Vitality > 0)
-            moss.TakeBite(1);
-
         var settler = new PlantSettler();
-        PlantSettleReport report = settler.Settle(1, FakeWeather.Rain(1), map.Cells);
+        settler.Settle(1, FakeWeather.Sun(1), map.Cells);
+        settler.Settle(2, FakeWeather.Sun(2), map.Cells);
+        Assert.AreEqual(0, cell.Detritus, "活着时不提前产生余屑。");
+        PlantSettleReport report = settler.Settle(3, FakeWeather.Sun(3), map.Cells);
 
         Assert.IsTrue(moss.IsDead);
         Assert.AreEqual(1, report.Recycled.Count);
-        Assert.AreEqual(1, cell.Detritus, "策划案：枯萎回收产出 1 份余屑");
+        Assert.AreEqual(1, cell.Detritus, "苔藓枯萎当晚就留下 1 份余屑。");
+        Assert.AreEqual(0, settler.Settle(3, FakeWeather.Sun(3), map.Cells).Recycled.Count);
+        Assert.AreEqual(0, settler.Settle(4, FakeWeather.Rain(), map.Cells).Recycled.Count);
+        Assert.AreEqual(1, cell.Detritus);
     }
 
     [Test]
@@ -404,12 +444,12 @@ public class PlantSettlerTests
     }
 
     [Test]
-    public void 相同输入得到相同结果()
+    public void 相同输入和随机种子得到相同结果()
     {
         int[] first = RunSevenDays(12345);
         int[] second = RunSevenDays(12345);
         CollectionAssert.AreEqual(first, second,
-            "策划案验收：相同初始布局、天气序列和操作顺序应得到同样结果");
+            "相同初始布局、天气序列、操作顺序和随机种子应得到同样结果");
     }
 
     /// <summary>跑满 7 天，每天结束后的全图活力与余屑快照。</summary>
@@ -421,7 +461,7 @@ public class PlantSettlerTests
         PlantSettler.Place(new Gymnosperm(), map.Get(Vector2Int.zero));
         map.Get(new Vector2Int(1, 1)).Detritus = 2;
 
-        var settler = new PlantSettler();
+        var settler = new PlantSettler(seed);
         bool[] sun = { true, false, true, true, false, false, true };
         var random = new System.Random(seed);
         var snapshot = new List<int>();

@@ -80,6 +80,10 @@ public sealed class AnimalWorldView : IAnimalWorld
         if (cell.Subject == null || cell.Subject.IsDead)
             return true;
 
+        // 奶蛙能在普通种子植物下取种、休息；巨型株仍阻挡大体型动物。
+        if (animal.Species == E_AnimalSpecies.MilkFrog && cell.Subject is SeedPlantsBase tree)
+            return tree.Stage != E_PlantStage.Giant;
+
         return animal.HasTag(E_ActivityTag.Climbing) || animal.HasTag(E_ActivityTag.Burrowing);
     }
 

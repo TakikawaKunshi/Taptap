@@ -4,7 +4,7 @@ using UnityEngine;
 
 /// <summary>
 /// 苔藓。作为地表覆盖可以与主体植物共存，是蚯蚓和蜗牛的食物，也是炼化材料。
-/// 雨天增长并向一个相邻空地申请扩张；晴天衰减，连续晴天会枯萎。
+/// 雨天增长并向一个相邻空地申请扩张；晴天衰减，活力归零时立即留下 1 份余屑。
 /// </summary>
 [Serializable]
 public class Moss : SporePlantsBase
@@ -41,7 +41,7 @@ public class Moss : SporePlantsBase
     /// <summary>
     /// 策划案把苔藓列为蜗牛与蚯蚓的食物，也是炼化疯长药水的必需材料。
     /// 取食由 SporePlantsBase 的 TakeBite 直接扣活力，这里只声明能否被吃。
-    /// 活力归零后孢子植物会被下一次结算回收，所以那里已经不作为食物。
+    /// 活力归零后立即回收为余屑，不再作为植物食物。
     /// </summary>
     public override int FoodAmount
     {
@@ -68,6 +68,9 @@ public class Moss : SporePlantsBase
     {
         get { return 1; }
     }
+
+    /// <summary>枯萎或被取食至零活力时立即回收，不额外等待一晚。</summary>
+    protected override bool RecycleImmediatelyWhenDepleted => true;
 
     protected override string MinimumRequirement
     {
@@ -98,7 +101,7 @@ public class Moss : SporePlantsBase
 
         plan.VitalityDelta = GrowthPerRain;
 
-        // 策划案：雨天向 1 个相邻空地扩张。目标格由结算方在固定顺序的邻接中裁决，
+        // 雨天向 1 个相邻空地扩张。每次由结算方从可用邻格中随机选择目标，
         // 因此这里只提出申请，不自己挑选格子。
         // 是否还有空格要检查邻接而不是本格：本格一定有自己这株苔藓。
         if (!HasFreeNeighbor(cell))

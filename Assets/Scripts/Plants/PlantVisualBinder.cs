@@ -1,28 +1,34 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// 把地图里的植物同步成可见的占位物体。
-///
-/// 同步走双通道：结算完成事件 + 低频轮询。铺场、拖放、扩张、结算，
-/// 无论植物从哪条路进的地图都会被看到；即使某个入口忘了发事件，轮询也会兜住。
-/// 同步只读地图与植物，不写任何逻辑数据，因此多跑几次不会影响结算结果。
+/// 按物种实例化用户配置的植物预设体；未配置的物种不创建显示物体。
+/// 结算事件与低频轮询只同步显示，不修改植物逻辑数据。
 /// </summary>
 [DisallowMultipleComponent]
 public class PlantVisualBinder : MonoBehaviour
 {
-    // 全局绘制顺序：地形 0、覆盖植物 1、主体植物 2、动物 3、携带物 4，均低于 UI。
-    // 使用常量，避免场景中旧的 20 / 30 排序配置覆盖代码中的新值。
-    private const int CoverOrder = 1;
-    private const int SubjectOrder = 2;
-
     [SerializeField] private TileMapManager map;
     [SerializeField] private PlantSettlementBridge bridge;
-    [SerializeField, Tooltip("临时用图；换正式美术时直接替换这张贴图即可。")]
-    private Texture2D plantTexture;
-    [SerializeField, Tooltip("留空时自动找 URP 的 2D 精灵着色器；AddComponent 的默认材质在 URP 下会显示为粉色。")]
-    private Material spriteMaterial;
+
+    [Header("物种预设体（留空不创建，外观由预设体决定）")]
+    [SerializeField, InspectorName("藻类 (Algae)")] private GameObject algaePrefab;
+    [SerializeField, InspectorName("苔藓 (Moss)")] private GameObject mossPrefab;
+    [SerializeField, InspectorName("蘑菇 (Mushroom)")] private GameObject mushroomPrefab;
+    [SerializeField, InspectorName("裸子植物 (Gymnosperm)")] private GameObject gymnospermPrefab;
+    [SerializeField, InspectorName("被子植物 (Angiosperm)")] private GameObject angiospermPrefab;
+
+    [Header("蘑菇活力表现")]
+    [SerializeField, Min(1), Tooltip("达到此活力时使用蘑菇预设体的原始大小；低于此值缩小，高于此值放大。")]
+    private int mushroomReferenceVitality = 5;
+
+    [Header("余屑显示")]
+    [SerializeField, Tooltip("自行挂载余屑预设体。每个有余屑的格子显示一堆，余屑耗尽时移除；留空只保留资源数据。")]
+    private GameObject detritusPrefab;
+    [SerializeField, Tooltip("余屑相对格子中心的世界坐标偏移，便于调整贴地位置。")]
+    private Vector3 detritusOffset;
+
+    [Header("同步")]
     [SerializeField, Min(0.05f), Tooltip("轮询间隔（秒），兜住没有发事件的种植路径。")]
     private float syncInterval = 0.25f;
     [SerializeField, Tooltip("同一格多个覆盖层沿对角线错开的间距。")]
@@ -32,13 +38,37 @@ public class PlantVisualBinder : MonoBehaviour
         = new Dictionary<PlantsBase, PlantVisual>();
     private readonly HashSet<PlantsBase> seen = new HashSet<PlantsBase>();
     private readonly List<PlantsBase> gone = new List<PlantsBase>();
-    private Sprite cachedSprite;
+    private readonly Dictionary<TileCell, GameObject> detritusVisuals = new Dictionary<TileCell, GameObject>();
+    private readonly HashSet<TileCell> seenDetritus = new HashSet<TileCell>();
+    private readonly List<TileCell> goneDetritus = new List<TileCell>();
+    private GameObject displayedDetritusPrefab;
     private float nextSync;
 
-    /// <summary>当前已经画出来的植物，供调试菜单与测试核对。</summary>
-    public IReadOnlyDictionary<PlantsBase, PlantVisual> Visuals
+    /// <summary>当前已经实例化的植物，供调试菜单与测试核对。</summary>
+    public IReadOnlyDictionary<PlantsBase, PlantVisual> Visuals => visuals;
+    public IReadOnlyDictionary<TileCell, GameObject> DetritusVisuals => detritusVisuals;
+
+    public TileMapManager Map
     {
-        get { return visuals; }
+        get
+        {
+            if (map == null)
+                map = FindObjectOfType<TileMapManager>();
+            return map;
+        }
+    }
+
+    public GameObject GetPrefab(E_PlantSpecies species)
+    {
+        switch (species)
+        {
+            case E_PlantSpecies.Algae: return algaePrefab;
+            case E_PlantSpecies.Moss: return mossPrefab;
+            case E_PlantSpecies.Mushroom: return mushroomPrefab;
+            case E_PlantSpecies.Gymnosperm: return gymnospermPrefab;
+            case E_PlantSpecies.Angiosperm: return angiospermPrefab;
+            default: return null;
+        }
     }
 
     private void OnEnable()
@@ -66,7 +96,7 @@ public class PlantVisualBinder : MonoBehaviour
         SyncNow();
     }
 
-    /// <summary>立刻按地图现状重画一遍。公开出来便于铺场后马上调用。</summary>
+    /// <summary>同步实例、位置和名称；更换或清空预设体配置也会在下次同步时生效。</summary>
     public void SyncNow()
     {
         nextSync = Time.realtimeSinceStartup + syncInterval;
@@ -75,12 +105,22 @@ public class PlantVisualBinder : MonoBehaviour
         if (map == null)
             return;
 
+        if (displayedDetritusPrefab != detritusPrefab)
+        {
+            foreach (GameObject visual in detritusVisuals.Values)
+                RemoveObject(visual);
+            detritusVisuals.Clear();
+            displayedDetritusPrefab = detritusPrefab;
+        }
+
         seen.Clear();
+        seenDetritus.Clear();
         foreach (TileCell cell in map.Cells)
         {
             if (cell == null)
                 continue;
 
+            TouchDetritus(cell);
             PlantsBase subject = cell.Subject;
             if (subject != null && !subject.IsDead)
                 Touch(subject, cell, true, 0);
@@ -95,7 +135,7 @@ public class PlantVisualBinder : MonoBehaviour
             }
         }
 
-        // 地图上已经找不到的植物（回收、被动物搬走等）连同物体一起清掉。
+        // 回收、移走或清空预设体配置的植物，连同显示物体一起清理。
         gone.Clear();
         foreach (KeyValuePair<PlantsBase, PlantVisual> pair in visuals)
         {
@@ -104,12 +144,18 @@ public class PlantVisualBinder : MonoBehaviour
         }
         for (int i = 0; i < gone.Count; i++)
         {
-            PlantVisual visual;
-            if (!visuals.TryGetValue(gone[i], out visual))
-                continue;
-            if (visual != null)
-                Destroy(visual.gameObject);
+            RemoveVisual(visuals[gone[i]]);
             visuals.Remove(gone[i]);
+        }
+
+        goneDetritus.Clear();
+        foreach (TileCell cell in detritusVisuals.Keys)
+            if (!seenDetritus.Contains(cell))
+                goneDetritus.Add(cell);
+        foreach (TileCell cell in goneDetritus)
+        {
+            RemoveObject(detritusVisuals[cell]);
+            detritusVisuals.Remove(cell);
         }
     }
 
@@ -121,22 +167,47 @@ public class PlantVisualBinder : MonoBehaviour
 
     private void Touch(PlantsBase plant, TileCell cell, bool subject, int coverIndex)
     {
+        GameObject prefab = GetPrefab(plant.Species);
+        if (prefab == null)
+            return;
+
         seen.Add(plant);
 
         PlantVisual visual;
-        if (!visuals.TryGetValue(plant, out visual) || visual == null)
+        visuals.TryGetValue(plant, out visual);
+        if (visual != null && visual.SourcePrefab != prefab)
         {
-            GameObject go = new GameObject(plant.DescribeShort());
-            go.transform.SetParent(transform, false);
-            visual = go.AddComponent<PlantVisual>();
-            // 默认材质是内置管线的 Sprites-Default，URP 下会粉红；先换成项目在用的 2D 精灵材质。
-            visual.GetComponent<SpriteRenderer>().sharedMaterial = ResolveMaterial();
-            visual.Bind(plant, ResolveSprite(), subject ? SubjectOrder : CoverOrder, subject);
+            RemoveVisual(visual);
+            visual = null;
+        }
+        if (visual == null)
+        {
+            GameObject go = Instantiate(prefab, transform, false);
+            visual = go.GetComponent<PlantVisual>();
+            if (visual == null)
+                visual = go.AddComponent<PlantVisual>();
+            visual.Bind(plant, prefab);
             visuals[plant] = visual;
         }
 
+        // 蘑菇按活力缩放；其他外观属性保持预设体配置。
         visual.transform.position = cell.WorldPosition + OffsetFor(subject, coverIndex);
-        visual.Refresh();
+        visual.Refresh(mushroomReferenceVitality);
+    }
+
+    private void TouchDetritus(TileCell cell)
+    {
+        if (detritusPrefab == null || cell.Detritus <= 0)
+            return;
+
+        seenDetritus.Add(cell);
+        if (!detritusVisuals.TryGetValue(cell, out GameObject visual) || visual == null)
+        {
+            visual = Instantiate(detritusPrefab, transform, false);
+            detritusVisuals[cell] = visual;
+        }
+        visual.transform.position = cell.WorldPosition + detritusOffset;
+        visual.name = "余屑 ×" + cell.Detritus + " " + cell.Coordinates;
     }
 
     private Vector3 OffsetFor(bool subject, int coverIndex)
@@ -144,65 +215,25 @@ public class PlantVisualBinder : MonoBehaviour
         if (subject)
             return Vector3.zero;
 
-        // 覆盖层沿左上对角线错开：苔藓、藻类可以和主体共存，也允许同格多层覆盖。
         float step = coverSpacing * (coverIndex + 1);
         return new Vector3(-step, step, 0f);
     }
 
-    /// <summary>解析项目在用的 2D 精灵材质；Builder 已经绑过就直接用。</summary>
-    private Material ResolveMaterial()
+    private void RemoveVisual(PlantVisual visual)
     {
-        if (spriteMaterial != null)
-            return spriteMaterial;
-
-        Shader shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Lit-Default");
-        if (shader == null)
-            shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-        {
-            Debug.LogWarning("PlantVisualBinder：找不到可用的精灵着色器，植物可能显示为粉色。", this);
-            return null;
-        }
-
-        spriteMaterial = new Material(shader);
-        return spriteMaterial;
+        if (visual != null)
+            RemoveObject(visual.gameObject);
     }
 
-    /// <summary>
-    /// 临时图是竖版插画，直接显示会变成一条细长的横幅。
-    /// 这里裁出中央偏上的方形再建 Sprite：人像通常在中上部，裁出来辨识度最高。
-    /// 只裁一次，之后所有植株共用同一份 Sprite。
-    /// </summary>
-    private Sprite ResolveSprite()
+    private void RemoveObject(GameObject visual)
     {
-        if (cachedSprite != null)
-            return cachedSprite;
-        if (plantTexture == null)
-            return null;
+        if (visual == null)
+            return;
 
-        try
-        {
-            int side = Mathf.Min(plantTexture.width, plantTexture.height);
-            int x = (plantTexture.width - side) / 2;
-            int y = Mathf.Min(plantTexture.height - side, (int)(plantTexture.height * 0.2f));
-            Color[] pixels = plantTexture.GetPixels(x, y, side, side);
-
-            Texture2D cropped = new Texture2D(side, side, TextureFormat.RGBA32, false);
-            cropped.SetPixels(pixels);
-            cropped.Apply();
-            cropped.filterMode = FilterMode.Bilinear;
-
-            cachedSprite = Sprite.Create(cropped, new Rect(0, 0, side, side),
-                new Vector2(0.5f, 0.5f), side);
-            cachedSprite.name = plantTexture.name + "_crop";
-            return cachedSprite;
-        }
-        catch (UnityException)
-        {
-            // 贴图没开 Read/Write 时 GetPixels 会抛异常；不阻断游戏，只是看不到植物。
-            Debug.LogWarning("PlantVisualBinder：贴图 " + plantTexture.name
-                             + " 未开启 Read/Write，无法生成占位图。请在导入设置里勾选。", this);
-            return null;
-        }
+        visual.SetActive(false);
+        if (Application.isPlaying)
+            Destroy(visual);
+        else
+            DestroyImmediate(visual);
     }
 }

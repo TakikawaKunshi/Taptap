@@ -128,6 +128,23 @@ public sealed class AnimalSettler
         return ((int)left.Species).CompareTo((int)right.Species);
     }
 
+    /// <summary>当前已实现行为、允许投放的动物物种。</summary>
+    public static bool IsSupported(E_AnimalSpecies species)
+    {
+        switch (species)
+        {
+            case E_AnimalSpecies.Frog:
+            case E_AnimalSpecies.Earthworm:
+            case E_AnimalSpecies.Snail:
+            case E_AnimalSpecies.Ant:
+            case E_AnimalSpecies.Spider:
+            case E_AnimalSpecies.MilkFrog:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     /// <summary>按物种创建一只动物，不落到任何格子上。</summary>
     public static AnimalsBase Create(E_AnimalSpecies species, int startingSatiety = 2)
     {
@@ -138,6 +155,7 @@ public sealed class AnimalSettler
             case E_AnimalSpecies.Snail: return new Snail(startingSatiety);
             case E_AnimalSpecies.Ant: return new Ant(startingSatiety);
             case E_AnimalSpecies.Spider: return new Spider(startingSatiety);
+            case E_AnimalSpecies.MilkFrog: return new MilkFrog(startingSatiety);
             default:
                 throw new ArgumentOutOfRangeException(nameof(species),
                     "该物种属于扩展内容，首版还没有实现：" + species);
@@ -168,6 +186,7 @@ public sealed class AnimalSettler
             throw new ArgumentNullException(nameof(weather));
 
         AnimalWorldView world = BuildWorld(weather, cells, animals);
+        DetritusLifecycle.SettleCells(day, world.Cells, report.Logs);
         List<AnimalsBase> ordered = CollectInFixedOrder(animals);
 
         List<Proposal> proposals = CollectProposals(ordered, day, world, report);
@@ -272,12 +291,19 @@ public sealed class AnimalSettler
         var eatenPlants = new HashSet<PlantsBase>();
         var scavengedCells = new HashSet<ICellEnv>();
         var huntedAnimals = new HashSet<AnimalsBase>();
+        var carriedSeeds = new HashSet<PlantsBase>();
 
         for (int i = 0; i < proposals.Count; i++)
         {
             Proposal proposal = proposals[i];
             AnimalSettlePlan plan = proposal.Plan;
             AnimalsBase animal = proposal.Animal;
+
+            if (plan.PickUpCarried && plan.SeedSource != null && !carriedSeeds.Add(plan.SeedSource))
+            {
+                Reject(plan, animal, " 想搬的种子本晚已经被其他动物预留。", report);
+                continue;
+            }
 
             if (plan.Action == E_AnimalAction.Graze && plan.PlantTarget != null)
             {
@@ -314,6 +340,10 @@ public sealed class AnimalSettler
         plan.ResetStarvation = false;
         plan.DetritusDelta = 0;
         plan.BiteAmount = 0;
+        plan.Action = E_AnimalAction.None;
+        plan.PickUpCarried = false;
+        plan.PutDownCarried = false;
+        plan.Logs.RemoveAll(entry => entry.RuleId == animal.RulePrefix + ".FEED");
         plan.Log(animal.RulePrefix + ".CONTEST", animal.DisplayName + reason);
         report.Rejected++;
     }
@@ -326,6 +356,10 @@ public sealed class AnimalSettler
             Proposal proposal = proposals[i];
             AnimalsBase animal = proposal.Animal;
             AnimalSettlePlan plan = proposal.Plan;
+
+            // 本晚已被高阶捕食者吃掉的动物不能继续执行旧提案。
+            if (animal.IsDead || animal.LastSettledDay >= day)
+                continue;
 
             ICellEnv from = proposal.Cell;
             ICellEnv destination = from;
@@ -350,6 +384,8 @@ public sealed class AnimalSettler
             {
                 report.SettledCount++;
                 report.AddLogs(plan);
+                if (plan.StarvedToDeath)
+                    report.StarvedCount++;
             }
 
             // 被捕食或饿死的动物要从快照里摘掉，后面的同晚查询才不会再看到它们。
@@ -368,8 +404,26 @@ public sealed class AnimalSettler
     {
         // 拾起种子：真正把它从成熟株上取走发生在这里。
         // BuildPlan 只登记意图，否则只读地预览一晚就会把种子提前消耗掉。
-        if (plan.PickUpCarried && plan.SeedSource != null)
-            plan.SeedSource.OnSeedTaken();
+        if (plan.PickUpCarried)
+        {
+            SeedPlantsBase seed = plan.SeedSource as SeedPlantsBase;
+            if (seed == null || cell.Subject != seed || !seed.TryTakeSeed())
+            {
+                plan.PickUpCarried = false;
+                plan.Action = E_AnimalAction.None;
+                CancelFeeding(animal, plan);
+                plan.Log(animal.RulePrefix + ".PICKUP_FAIL", animal.DisplayName + " 尚未到达种子，或种子已被取走。");
+            }
+            else
+            {
+                if (seed.IsDead)
+                    cell.Release(seed);
+                plan.Log(animal.RulePrefix + ".PICKUP", animal.DisplayName + " 拿起了 " + seed.DisplayName + " 的种子。");
+                // 蚂蚁拾种时吃种子碎片，不再对不能被啃食的成熟株执行 TakeBite。
+                if (plan.Action == E_AnimalAction.Graze && plan.PlantTarget == seed)
+                    plan.Action = E_AnimalAction.None;
+            }
+        }
 
         switch (plan.Action)
         {
@@ -390,6 +444,9 @@ public sealed class AnimalSettler
                 }
 
                 report.GrazedCount++;
+                if (plan.PlantTarget.IsDead)
+                    plan.Log(plan.PlantTarget.RulePrefix + ".RECYCLE",
+                        plan.PlantTarget.DisplayName + " 被取食至活力归零，立即回收为余屑。");
                 break;
 
             case E_AnimalAction.Scavenge:
@@ -412,13 +469,7 @@ public sealed class AnimalSettler
                 break;
         }
 
-        // 饿死的个体当场转为余屑，回收真的落到实处而不是只写日志。
-        if (plan.StarvedToDeath)
-        {
-            if (cell != null && plan.RecycleToDetritus > 0)
-                cell.Detritus += plan.RecycleToDetritus;
-            report.StarvedCount++;
-        }
+        // 饥饿死亡在 Commit 中按实际进食结果统一处理。
     }
 
     /// <summary>
@@ -430,8 +481,15 @@ public sealed class AnimalSettler
         AnimalSettleReport report)
     {
         AnimalsBase prey = plan.AnimalTarget;
-        if (prey == null || prey.IsDead)
+        CancelFeeding(hunter, plan);
+        if (prey == null || prey.IsDead || hunter.Satiety > 0 || plan.BiteAmount <= 0
+            || prey.CurrentCell != hunter.CurrentCell
+            || !AnimalFoodWeb.CanPrey(hunter.Species, prey.Species)
+            || (hunter.HungerState == E_HungerState.Weak && prey.BodySize == E_BodySize.Large))
+        {
+            plan.Log(hunter.RulePrefix + ".HUNT_FAIL", hunter.DisplayName + " 未能捕获猎物：目标已离开或不满足捕食条件。");
             return;
+        }
 
         // 猎物可以借助苔藓、菌伞、巢穴逃离：此时捕食失败。
         if (AnimalFoodWeb.HasShelter(prey.CurrentCell))
@@ -445,6 +503,11 @@ public sealed class AnimalSettler
 
         if (!prey.TakeBite(plan.BiteAmount))
             return;
+
+        plan.SatietyGain = AnimalsBase.SatietyPerMeal;
+        plan.ResetStarvation = true;
+        plan.ResetFailedNights = true;
+        plan.Log(hunter.RulePrefix + ".FEED", hunter.DisplayName + " 捕食了 " + prey.DisplayName + "，饱腹恢复。");
 
         // 死亡当场转成余屑，让"死亡 → 余屑 → 蘑菇与蚯蚓"的闭环在同一晚就开始。
         if (prey.CurrentCell != null)
@@ -493,14 +556,27 @@ public sealed class AnimalSettler
         return null;
     }
 
-    /// <summary>蚂蚁放下携带的种子：在空格上真的种出一株同种植物。</summary>
+    private static void CancelFeeding(AnimalsBase animal, AnimalSettlePlan plan)
+    {
+        plan.SatietyGain = 0;
+        plan.ResetStarvation = false;
+        plan.ResetFailedNights = false;
+        plan.Logs.RemoveAll(entry => entry.RuleId == animal.RulePrefix + ".FEED");
+    }
+
+    /// <summary>搬运者放下携带的种子：在到达的空格上种出一株同种植物。</summary>
     private void ApplyCarry(AnimalsBase animal, AnimalSettlePlan plan, ICellEnv cell, AnimalSettleReport report)
     {
-        if (!plan.PutDownCarried || animal.CarriedSeedSpecies == null)
+        if (!plan.PutDownCarried)
+            return;
+
+        // 只有种下成功才清空携带物；竞争失败或未到达时保留种子。
+        plan.PutDownCarried = false;
+        if (animal.CarriedSeedSpecies == null)
             return;
 
         ICellEnv drop = plan.ActionCell ?? cell;
-        if (drop == null || !drop.CanOccupy)
+        if (drop == null || drop != cell || !drop.CanOccupy)
         {
             plan.Log(animal.RulePrefix + ".DROP_FAIL",
                 animal.DisplayName + " 想在 " + (drop != null ? drop.Coordinates.ToString() : "目标格")
@@ -516,6 +592,7 @@ public sealed class AnimalSettler
         }
 
         plan.PlantTarget = sapling;
+        plan.PutDownCarried = true;
         plan.CarryKind = E_ResourceKind.Seed;
         report.NewPlants.Add(sapling);
         plan.Log(animal.RulePrefix + ".SEEDED",
