@@ -12,7 +12,7 @@ public enum MessageTag
     FoodChain
 }
 
-/// <summary>切换消息分类，并在各自的 Scroll View 中追加、保留消息。</summary>
+/// <summary>切换消息分类，并在各自的 Scroll View 中按最新优先的顺序保留消息。</summary>
 [DisallowMultipleComponent]
 [RequireComponent(typeof(RectTransform))]
 public class MessagePanel : MonoBehaviour
@@ -25,6 +25,7 @@ public class MessagePanel : MonoBehaviour
         public ScrollRect ScrollView;
 
         [NonSerialized] public UnityAction ClickAction;
+        [NonSerialized] public bool ScrollToLatestPending;
     }
 
     [Header("分类绑定（留空时按 MessageBar / ContentPanel 下的名称查找）")]
@@ -82,6 +83,21 @@ public class MessagePanel : MonoBehaviour
                 view.Button.onClick.RemoveListener(view.ClickAction);
             view.ClickAction = null;
         }
+    }
+
+    private void LateUpdate()
+    {
+        MessageView view = FindView(selectedTag);
+        if (view == null || !view.ScrollToLatestPending || view.ScrollView == null
+            || !view.ScrollView.IsActive() || view.ScrollView.content == null)
+            return;
+
+        // 同一帧的消息只刷新一次；隐藏分类保留请求，显示时再定位到最新消息。
+        Canvas.ForceUpdateCanvases();
+        LayoutRebuilder.ForceRebuildLayoutImmediate(view.ScrollView.content);
+        view.ScrollView.StopMovement();
+        view.ScrollView.verticalNormalizedPosition = 1f;
+        view.ScrollToLatestPending = false;
     }
 
     private void ResolveReferences()
@@ -213,14 +229,15 @@ public class MessagePanel : MonoBehaviour
             LayoutRebuilder.MarkLayoutForRebuild(target.ScrollView.content);
     }
 
-    /// <summary>向 InformationSV 追加观察信息，保留历史消息且不切换当前标签。</summary>
+    /// <summary>在 InformationSV 顶部插入观察信息，保留历史消息且不切换当前标签。</summary>
     public void ShowInformation(string message)
     {
         ShowMessage(message, MessageTag.Information);
     }
 
     /// <summary>
-    /// 在指定分类的 Content 容器下追加一条独立消息。隐藏分类也可以接收消息；不会自动切换标签。
+    /// 在指定分类的 Content 顶部插入一条独立消息，并在该分类可见时滚动到最新消息。
+    /// 隐藏分类也可以接收消息；不会自动切换标签。
     /// 消息保留到面板对象被销毁，不负责跨场景或退出游戏后的存档。
     /// </summary>
     public void ShowMessage(string message, MessageTag tag)
@@ -241,7 +258,7 @@ public class MessagePanel : MonoBehaviour
         var item = new GameObject("MessageContent", typeof(RectTransform));
         item.layer = content.gameObject.layer;
         item.transform.SetParent(content, false);
-        item.transform.SetAsLastSibling();
+        item.transform.SetAsFirstSibling();
 
         TextMeshProUGUI label = item.AddComponent<TextMeshProUGUI>();
         label.font = messageFont != null ? messageFont : TMP_Settings.defaultFontAsset;
@@ -254,6 +271,7 @@ public class MessagePanel : MonoBehaviour
         label.richText = false;
         label.raycastTarget = false;
         label.text = message;
+        view.ScrollToLatestPending = true;
         LayoutRebuilder.MarkLayoutForRebuild(content);
     }
 

@@ -18,9 +18,28 @@ public class PlantSettlementBridgeTests
     [UnitySetUp]
     public IEnumerator LoadScene()
     {
+#if UNITY_EDITOR
+        // Editor tests can load this scene without changing the player's build scenes.
+        yield return UnityEditor.SceneManagement.EditorSceneManager.LoadSceneAsyncInPlayMode(
+            ScenePath, new LoadSceneParameters(LoadSceneMode.Single));
+#else
         yield return SceneManager.LoadSceneAsync(ScenePath, LoadSceneMode.Single);
+#endif
         yield return null;
         yield return null;
+    }
+
+    [UnityTearDown]
+    public IEnumerator UnloadScene()
+    {
+        Scene scene = SceneManager.GetSceneByPath(ScenePath);
+        if (!scene.IsValid() || !scene.isLoaded)
+            yield break;
+
+        // Unity 不能卸载最后一个场景；保留空场景供后续测试使用。
+        if (SceneManager.sceneCount == 1)
+            SceneManager.CreateScene("Empty PlayMode Test Scene");
+        yield return SceneManager.UnloadSceneAsync(scene);
     }
 
     [UnityTest]

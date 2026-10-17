@@ -10,8 +10,7 @@ public class SporePlantRuleTests
     private static Moss PlaceMoss(FakeCell cell)
     {
         var moss = new Moss();
-        moss.PlaceAt(cell.Coordinates);
-        cell.TryAddCover(moss);
+        PlantSettler.Place(moss, cell);
         return moss;
     }
 
@@ -186,10 +185,11 @@ public class SporePlantRuleTests
         Assert.AreEqual(before - 2, mushroom.Vitality, "策划案：蘑菇晴天-2");
     }
 
-    [Test]
-    public void 蘑菇雨天无余屑时只衰减不增长()
+    [TestCase(0, 1)]
+    [TestCase(1, 2)]
+    public void 蘑菇雨天按余屑条件生长且不重复结算(int detritus, int growth)
     {
-        var cell = new FakeCell(Vector2Int.zero, true, 0, E_SurfaceKind.Ground, true);
+        var cell = new FakeCell(Vector2Int.zero, true, detritus, E_SurfaceKind.Ground, true);
         var mushroom = new Mushroom();
         mushroom.PlaceAt(cell.Coordinates);
         cell.TrySetSubject(mushroom);
@@ -197,7 +197,35 @@ public class SporePlantRuleTests
         int before = mushroom.Vitality;
         mushroom.PlantSettle(1, FakeWeather.Rain(1), cell);
 
-        Assert.AreEqual(before, mushroom.Vitality, "策划案把余屑列为蘑菇的最低条件");
+        Assert.AreEqual(before + growth, mushroom.Vitality);
+        Assert.AreEqual(detritus, cell.Detritus, "余屑是养分条件，不在蘑菇增长时消耗。");
+        mushroom.PlantSettle(1, FakeWeather.Rain(1), cell);
+        Assert.AreEqual(before + growth, mushroom.Vitality, "同一天重复结算不重复增长。");
+    }
+
+    [TestCase(0, 3)]
+    [TestCase(1, 2)]
+    public void 蘑菇达到成熟当晚产孢子并遵守冷却(int detritus, int matureDay)
+    {
+        var cell = new FakeCell(Vector2Int.zero, true, detritus);
+        var mushroom = new Mushroom();
+        PlantSettler.Place(mushroom, cell);
+        for (int day = 1; day < matureDay; day++)
+        {
+            var immature = mushroom.Propose(day, FakeWeather.Rain(), cell);
+            Assert.AreEqual(0, immature.ProduceAmount);
+            mushroom.Commit(day, cell, immature);
+        }
+        var mature = mushroom.Propose(matureDay, FakeWeather.Rain(), cell);
+        Assert.AreEqual(1, mature.ProduceAmount);
+        Assert.AreEqual(E_ResourceKind.Spore, mature.ProduceKind);
+        mushroom.Commit(matureDay, cell, mature);
+        Assert.AreEqual(1, mushroom.ProduceCooldown);
+        var cooling = mushroom.Propose(matureDay + 1, FakeWeather.Rain(), cell);
+        Assert.AreEqual(0, cooling.ProduceAmount);
+        mushroom.Commit(matureDay + 1, cell, cooling);
+        Assert.AreEqual(0, mushroom.ProduceCooldown);
+        Assert.AreEqual(1, mushroom.Propose(matureDay + 2, FakeWeather.Rain(), cell).ProduceAmount);
     }
 
     [Test]
@@ -215,7 +243,7 @@ public class SporePlantRuleTests
     }
 
     [Test]
-    public void 被取食到零时进入枯萎()
+    public void 苔藓被取食到零时立即留下一个余屑且不重复回收()
     {
         var cell = new FakeCell(Vector2Int.zero, true);
         Moss moss = PlaceMoss(cell);
@@ -223,25 +251,31 @@ public class SporePlantRuleTests
         while (moss.Vitality > 0)
             moss.TakeBite(1);
 
-        Assert.IsTrue(moss.IsWithering, "活力归零应进入枯萎而不是立即消失");
-        Assert.IsFalse(moss.IsDead, "枯萎当晚不回收");
+        Assert.IsTrue(moss.IsDead);
+        Assert.AreEqual(1, cell.Detritus);
+        CollectionAssert.DoesNotContain(cell.Cover, moss);
+        Assert.IsFalse(moss.TakeBite(1));
+        Assert.IsFalse(moss.PlantSettle(1, FakeWeather.Rain(), cell));
+        Assert.IsFalse(moss.PlantSettle(2, FakeWeather.Sun(), cell));
+        Assert.AreEqual(1, cell.Detritus, "重复取食和后续过夜不能再次发放余屑。");
     }
 
     [Test]
-    public void 枯萎的植物下一晚回收成余屑()
+    public void 藻类仍在枯萎下一晚回收成余屑()
     {
         var cell = new FakeCell(Vector2Int.zero, true);
-        Moss moss = PlaceMoss(cell);
+        var algae = new Algae();
+        PlantSettler.Place(algae, cell);
 
-        while (moss.Vitality > 0)
-            moss.TakeBite(1);
-        Assert.IsTrue(moss.IsWithering);
+        while (algae.Vitality > 0)
+            algae.TakeBite(1);
+        Assert.IsTrue(algae.IsWithering);
 
         int detritusBefore = cell.Detritus;
-        moss.PlantSettle(1, FakeWeather.Rain(), cell);
+        algae.PlantSettle(1, FakeWeather.Rain(), cell);
 
-        Assert.IsTrue(moss.IsDead, "下一晚应该被回收");
-        Assert.AreEqual(detritusBefore + 1, cell.Detritus, "策划案：苔藓回收产出 1 份余屑");
+        Assert.IsTrue(algae.IsDead, "藻类保留原有回收时机。");
+        Assert.AreEqual(detritusBefore + 1, cell.Detritus);
     }
 
     [Test]

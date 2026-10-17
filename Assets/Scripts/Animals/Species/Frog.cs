@@ -1,8 +1,7 @@
 /// <summary>
 /// 青蛙，MVP 的核心捕食者。
 /// 策划案：两栖类，捕食小型无脊椎动物，雨天沿雨印移动；
-/// 在 MVP 里麻雀与奶蛙都不实例化，因此它是首版的顶级捕食者——
-/// 这正是策划案"顶级捕食者不强行添加一个不合理天敌"的选择。
+/// 奶蛙加入后，青蛙也会感知高阶捕食者并寻找庇护。
 /// </summary>
 public sealed class Frog : AnimalsBase
 {
@@ -26,10 +25,35 @@ public sealed class Frog : AnimalsBase
 
     protected override bool EatsDetritus => false;
 
-    /// <summary>青蛙在 MVP 中没有天敌，因此不需要逃跑；返回 false 让它继续按优先级往下走。</summary>
+    /// <summary>奶蛙接近时优先躲藏；有庇护时原地藏好，否则逃向更安全的位置。</summary>
     protected override bool TryEscape(AnimalSettlePlan plan, int day, IAnimalWorld world, ICellEnv cell)
     {
-        return false;
+        if (!AnimalFoodWeb.AnyPredatorNear(world, this, 1))
+            return false;
+        ICellEnv hide = PickBest(world, cell, MaxStepsForTonight, candidate =>
+        {
+            if (candidate != cell && !world.CanEnter(this, candidate))
+                return float.NegativeInfinity;
+            float safety = CellHasShelter(candidate) ? 100f : 0f;
+            int nearestThreat = int.MaxValue;
+            foreach (ICellEnv otherCell in world.Cells)
+                foreach (AnimalsBase other in world.AnimalsAt(otherCell))
+                    if (!other.IsDead && AnimalFoodWeb.IsThreatenedBy(Species, other.Species))
+                    {
+                        int distance = world.StepDistance(candidate, otherCell);
+                        if (distance >= 0)
+                            nearestThreat = System.Math.Min(nearestThreat, distance);
+                    }
+            return safety + (nearestThreat == int.MaxValue ? 0 : nearestThreat)
+                - world.StepDistance(cell, candidate) * 0.1f;
+        });
+        plan.Goal = E_AnimalGoal.Escape;
+        plan.MoveTarget = hide != cell ? hide : null;
+        plan.EntersShelter = CellHasShelter(hide);
+        plan.RememberSafety = hide;
+        plan.Action = E_AnimalAction.Hide;
+        plan.Log(RulePrefix + ".FLEE", DisplayName + " 察觉奶蛙等捕食者，优先寻找安全位置。");
+        return true;
     }
 
     protected override bool TryForage(AnimalSettlePlan plan, int day, IAnimalWorld world, ICellEnv cell)

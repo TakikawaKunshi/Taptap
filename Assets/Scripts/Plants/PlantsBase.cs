@@ -13,6 +13,10 @@ public abstract class PlantsBase : IPlantInteraction
     private Vector2Int coordinates;
     private int lastSettledDay;
     private bool placed;
+    [NonSerialized] private ICellEnv currentCell;
+
+    /// <summary>实际登记的格子，供取食导致的即时回收使用。</summary>
+    protected ICellEnv CurrentCell => currentCell;
 
     public E_PlantSpecies Species
     {
@@ -94,6 +98,7 @@ public abstract class PlantsBase : IPlantInteraction
             return false;
 
         PlantSettlePlan plan = BuildPlan(day, weather, cell);
+        currentCell = cell;
         ApplyPlan(plan, cell);
         lastSettledDay = day;
         NotifyChanged();
@@ -133,10 +138,20 @@ public abstract class PlantsBase : IPlantInteraction
         if (IsDead || day <= lastSettledDay)
             return false;
 
+        currentCell = cell;
         ApplyPlan(plan, cell);
         lastSettledDay = day;
         NotifyChanged();
         return true;
+    }
+
+    /// <summary>正式投放时同时绑定格子，使首次过夜之前的取食也能正确回收资源。</summary>
+    public void PlaceAt(ICellEnv cell)
+    {
+        if (cell == null)
+            throw new ArgumentNullException(nameof(cell));
+        PlaceAt(cell.Coordinates);
+        currentCell = cell;
     }
 
     /// <summary>

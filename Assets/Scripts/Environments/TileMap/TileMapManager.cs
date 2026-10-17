@@ -65,7 +65,7 @@ public class TileMapManager : MonoBehaviour
     private void Update()
     {
         if (Input.GetMouseButtonDown(0))
-            TrySelectCellAtScreenPosition(Input.mousePosition);
+            TryInspectAtScreenPosition(Input.mousePosition);
     }
 
     private void LateUpdate()
@@ -182,9 +182,49 @@ public class TileMapManager : MonoBehaviour
         return cells.TryGetValue(position, out cell) && cell != null;
     }
 
+    /// <summary>先把屏幕点击转换为格子；每次显示一个物种，动物优先，其次主体植物、地表覆盖。</summary>
+    public bool TryInspectAtScreenPosition(Vector2 screenPosition)
+    {
+        if (!TryGetCellAtScreenPosition(screenPosition, out TileCell cell))
+            return false;
+
+        RefreshWeather(false);
+        cell.SweepDeadPlants();
+        AnimalsBase animal = FindAnimalInCell(cell);
+        PlantsBase plant = cell.Subject;
+        if (plant == null)
+            foreach (PlantsBase cover in cell.Cover)
+                if (cover != null && !cover.IsDead) { plant = cover; break; }
+        if (animal == null && plant == null)
+        {
+            ShowCellStatus(cell);
+            if (messagePanel != null) messagePanel.SelectTab(MessageTag.Information);
+            return true;
+        }
+
+        // 生物观察是一条当前状态快照，不再让先前选中的格子随天气变化抢占消息顶部。
+        SelectedCell = null;
+        if (ResolveMessagePanel())
+        {
+            string status = animal != null ? SpeciesStatusText.For(animal) : SpeciesStatusText.For(plant);
+            messagePanel.ShowInformation(status);
+            messagePanel.SelectTab(MessageTag.Information);
+        }
+        return true;
+    }
+
     /// <summary>射线与地图平面求交后定位格子，兼容正交及倾斜透视相机，无需逐格碰撞体。</summary>
     public bool TrySelectCellAtScreenPosition(Vector2 screenPosition)
     {
+        if (!TryGetCellAtScreenPosition(screenPosition, out TileCell cell)) return false;
+        cell.ShowStatus();
+        return true;
+    }
+
+    /// <summary>屏幕坐标 → 地图平面交点 → Tilemap 坐标 → 逻辑格；不依赖模型大小、排序或碰撞体。</summary>
+    public bool TryGetCellAtScreenPosition(Vector2 screenPosition, out TileCell cell)
+    {
+        cell = null;
         if (!isActiveAndEnabled || !initialized || cells.Count == 0 || IsPointerOverUI(screenPosition))
             return false;
         Camera camera = inputCamera != null ? inputCamera : Camera.main;
@@ -205,10 +245,28 @@ public class TileMapManager : MonoBehaviour
         Vector3Int position = tilemap.WorldToCell(ray.GetPoint(distance));
         // 平面求交的小数误差可能使 Z 被向下取整到相邻层。
         position.z = OriginCellPosition.z;
-        if (!tilemap.HasTile(position) || !TryGetCellAtTilemapPosition(position, out TileCell cell))
+        if (!tilemap.HasTile(position) || !TryGetCellAtTilemapPosition(position, out cell))
             return false;
-        cell.ShowStatus();
         return true;
+    }
+
+    private AnimalsBase FindAnimalInCell(TileCell cell)
+    {
+        AnimalsBase best = null;
+        // 按真实登记查询；初始动物、卡片投放动物和没有挂外观的动物使用相同规则。
+        AnimalSpawner[] spawners = FindObjectsOfType<AnimalSpawner>();
+        System.Array.Sort(spawners, (left, right) => left.GetInstanceID().CompareTo(right.GetInstanceID()));
+        foreach (AnimalSpawner spawner in spawners)
+        {
+            if (spawner.Map != this) continue;
+            foreach (AnimalsBase animal in spawner.Animals)
+            {
+                if (animal == null || animal.IsDead || !ReferenceEquals(animal.CurrentCell, cell)) continue;
+                // 多只动物时采用稳定物种顺序，同种按登记顺序，重复点击不会随机切换。
+                if (best == null || animal.Species < best.Species) best = animal;
+            }
+        }
+        return best;
     }
 
     private bool IsPointerOverUI(Vector2 screenPosition)

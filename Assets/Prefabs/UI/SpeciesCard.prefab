@@ -34,7 +34,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 0.5}
   m_AnchorMax: {x: 0, y: 0.5}
-  m_AnchoredPosition: {x: 100, y: -10}
+  m_AnchoredPosition: {x: 100, y: 20}
   m_SizeDelta: {x: 200, y: 50}
   m_Pivot: {x: 0, y: 0.5}
 --- !u!222 &8476103891935022849
@@ -307,7 +307,7 @@ RectTransform:
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
   m_AnchoredPosition: {x: -10, y: 0}
-  m_SizeDelta: {x: 340, y: 100}
+  m_SizeDelta: {x: 340, y: 150}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!222 &717500931067620010
 CanvasRenderer:
@@ -405,7 +405,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   m_Material: {fileID: 0}
-  m_Color: {r: 0.45834818, g: 0.8021675, b: 0.9433962, a: 1}
+  m_Color: {r: 1, g: 1, b: 1, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -610,7 +610,9 @@ MonoBehaviour:
     Name: 
     Description: 
     DailyCount: 0
-    Prefab: {fileID: 0}
+    Kind: 0
+    PlantSpecies: 0
+    AnimalSpecies: 0
   currentCount: 0
   iconImage: {fileID: 4557312044625147114}
   speciesName: {fileID: 0}
@@ -622,4 +624,5 @@ MonoBehaviour:
   timeManager: {fileID: 0}
   environment: {fileID: 0}
   placementCamera: {fileID: 0}
-  speciesParent: {fileID: 0}
+  plantVisualBinder: {fileID: 0}
+  animalVisualBinder: {fileID: 0}

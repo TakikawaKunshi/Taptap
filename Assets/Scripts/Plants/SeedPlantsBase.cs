@@ -75,6 +75,23 @@ public abstract class SeedPlantsBase : PlantsBase
         get { return seedOnGround; }
     }
 
+    /// <summary>尚未萌芽的种子本体，或成熟株掉落的种子，可被搬运。</summary>
+    public bool HasTransportableSeed => !IsDead && (Stage == E_PlantStage.Seed || seedOnGround);
+
+    /// <summary>实际取走一份种子；搬走种子本体时释放原位置，不产生死亡余屑。</summary>
+    public bool TryTakeSeed()
+    {
+        if (!HasTransportableSeed)
+            return false;
+        if (Stage == E_PlantStage.Seed)
+        {
+            MarkDead();
+            CurrentCell?.Release(this);
+        }
+        OnSeedTaken();
+        return true;
+    }
+
     /// <summary>是否已经使用过疯长药水。策划案要求不能对同一株重复使用。</summary>
     public bool PotionUsed { get; private set; }
 

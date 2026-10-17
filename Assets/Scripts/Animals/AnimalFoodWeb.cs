@@ -4,9 +4,8 @@ using System.Collections.Generic;
 /// 食物网关系表。策划案第六章的"候选生物捕食关系表"集中落在这里，
 /// 让每种动物的代码只描述自己的行为，而不用各自维护谁能吃谁。
 ///
-/// 只实现 MVP 五种之间的相互关系：
-/// 鱼类、麻雀、奶蛙是扩展对象，表格里保留它们作为捕食者的位置但不在 MVP 中实例化，
-/// 因此青蛙在首版里没有天敌——这正是策划案"顶级捕食者不强行添加一个不合理天敌"的要求。
+/// 当前实现 MVP 五种与奶蛙；鱼类、沙蚕、麻雀的关系保留供后续扩展。
+/// 奶蛙不配置更高捕食者。
 /// </summary>
 public static class AnimalFoodWeb
 {
@@ -53,7 +52,11 @@ public static class AnimalFoodWeb
                     E_AnimalSpecies.Frog,
                     E_AnimalSpecies.Fish,
                     E_AnimalSpecies.Sandworm,
-                    E_AnimalSpecies.Sparrow
+                    E_AnimalSpecies.Sparrow,
+                    // 食物网表也在这些猎物的“谁会捕食它”栏列出了奶蛙。
+                    E_AnimalSpecies.Earthworm,
+                    E_AnimalSpecies.Snail,
+                    E_AnimalSpecies.Spider
                 }
             }
         };

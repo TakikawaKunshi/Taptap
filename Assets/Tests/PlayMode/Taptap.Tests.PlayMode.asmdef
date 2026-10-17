@@ -3,8 +3,11 @@
     "rootNamespace": "",
     "references": [
         "Taptap.Runtime",
-        "UnityEngine.TestRunner",
-        "UnityEditor.TestRunner"
+        "UnityEngine.UI",
+        "Unity.TextMeshPro"
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

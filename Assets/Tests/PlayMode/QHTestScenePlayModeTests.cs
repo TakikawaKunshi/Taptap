@@ -18,7 +18,13 @@ public class QHTestScenePlayModeTests
     [UnitySetUp]
     public IEnumerator LoadScene()
     {
+#if UNITY_EDITOR
+        // Editor tests can load this scene without changing the player's build scenes.
+        yield return UnityEditor.SceneManagement.EditorSceneManager.LoadSceneAsyncInPlayMode(
+            ScenePath, new LoadSceneParameters(LoadSceneMode.Single));
+#else
         yield return SceneManager.LoadSceneAsync(ScenePath, LoadSceneMode.Single);
+#endif
         // 等待 TileMapManager.Start 完成格子生成。
         yield return null;
         yield return null;
@@ -27,6 +33,19 @@ public class QHTestScenePlayModeTests
         ApplyWeather(E_WeatherType.Rain);
         yield return null;
         yield return null;
+    }
+
+    [UnityTearDown]
+    public IEnumerator UnloadScene()
+    {
+        Scene scene = SceneManager.GetSceneByPath(ScenePath);
+        if (!scene.IsValid() || !scene.isLoaded)
+            yield break;
+
+        // Unity 不能卸载最后一个场景；保留空场景供后续测试使用。
+        if (SceneManager.sceneCount == 1)
+            SceneManager.CreateScene("Empty PlayMode Test Scene");
+        yield return SceneManager.UnloadSceneAsync(scene);
     }
 
     /// <summary>设置当天天气并等格子状态同步完成。</summary>

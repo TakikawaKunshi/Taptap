@@ -13,7 +13,7 @@ public enum E_TileState
 /// 同时作为植物看到的格子实现 ICellEnv：植物通过接口读取地面属性，不需要知道 Tilemap 的存在。
 /// </summary>
 [DisallowMultipleComponent]
-public class TileCell : MonoBehaviour, ICellEnv
+public class TileCell : MonoBehaviour, ICellEnv, IDetritusLifecycle
 {
     [Header("运行时格子信息")]
     [SerializeField] private TileBase tileAsset;
@@ -29,6 +29,7 @@ public class TileCell : MonoBehaviour, ICellEnv
     private E_SurfaceKind surface = E_SurfaceKind.Ground;
     [SerializeField, Min(0), Tooltip("该格的余屑份数；蘑菇与藻类在结算时读取或消耗它。")]
     private int detritus;
+    [SerializeField, HideInInspector] private DetritusLifecycle detritusLifetime;
 
     [Header("植物（运行时由 PlantSettler 写入）")]
     [SerializeField] private PlantsBase subject;
@@ -69,7 +70,31 @@ public class TileCell : MonoBehaviour, ICellEnv
     public int Detritus
     {
         get { return detritus; }
-        set { detritus = Mathf.Max(0, value); }
+        set
+        {
+            EnsureDetritusLifetime();
+            detritusLifetime.SetAmount(value);
+            detritus = detritusLifetime.Amount;
+        }
+    }
+
+    private void EnsureDetritusLifetime()
+    {
+        if (detritusLifetime == null)
+        {
+            TimeManager time = FindObjectOfType<TimeManager>();
+            detritusLifetime = new DetritusLifecycle(time != null ? time.CurrentDay - 1 : 0);
+        }
+        // Inspector 直接修改余屑数量时也保留已有批次，只为新增部分开始计时。
+        detritusLifetime.SetAmount(detritus);
+    }
+
+    public int AdvanceDetritusDay(int day)
+    {
+        EnsureDetritusLifetime();
+        int expired = detritusLifetime.AdvanceDay(day);
+        detritus = detritusLifetime.Amount;
+        return expired;
     }
 
     /// <summary>
@@ -199,6 +224,7 @@ public class TileCell : MonoBehaviour, ICellEnv
     /// <summary>绑定所属地图、原始格子位置及以中心格为原点的整数坐标。</summary>
     internal void Initialize(TileMapManager manager, TileBase tile, Vector3Int position, Vector2Int coordinate)
     {
+        EnsureDetritusLifetime();
         Manager = manager;
         tileAsset = tile;
         tilemapPosition = position;

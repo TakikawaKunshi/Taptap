@@ -2,15 +2,17 @@ using System;
 using UnityEngine;
 
 /// <summary>
-/// 蘑菇。依靠余屑与遮蔽生长，是蚯蚓、蜗牛和沙蚕的食物，也是死亡回收的主要起点。
-/// 策划案规则：最低条件为余屑加遮蔽或湿润；雨天活力+2 且成熟后产出一份孢子；
+/// 蘑菇。湿润或遮蔽处可生长，余屑提供额外养分。
+/// 雨天有余屑活力+2，无余屑+1，成熟后产出一份孢子；
 /// 晴天活力-2，所在格没有余屑时额外再扣 1 点。
 /// </summary>
 [Serializable]
 public class Mushroom : SporePlantsBase
 {
-    /// <summary>策划案：雨天活力+2。</summary>
+    /// <summary>雨天有余屑时的增长量；余屑只提供养分条件，不在这里消耗。</summary>
     private const int GrowthPerRain = 2;
+
+    private const int GrowthWithoutDetritus = 1;
 
     /// <summary>策划案：晴天活力-2。</summary>
     private const int DecayPerSun = 2;
@@ -43,7 +45,7 @@ public class Mushroom : SporePlantsBase
     /// <summary>
     /// 策划案把蘑菇列为蜗牛、蚯蚓和蚂蚁的食物。
     /// 份量按活力给：幼体只能抵一口，成熟菌伞够两只动物分。
-    /// 活力归零后进入枯萎，下一次结算即回收，因此不再作为食物。
+    /// 活力归零时立即回收为余屑，因此不再作为食物。
     /// </summary>
     public override int FoodAmount
     {
@@ -87,15 +89,16 @@ public class Mushroom : SporePlantsBase
         get { return RecycleDetritus; }
     }
 
+    protected override bool RecycleImmediatelyWhenDepleted => true;
+
     protected override string MinimumRequirement
     {
-        get { return "遮蔽或湿润；雨天还需要所在格有余屑"; }
+        get { return "遮蔽或湿润；所在格有余屑时生长更快"; }
     }
 
     /// <summary>
     /// 这里只判断位置条件，不把"有余屑"算进来。
-    /// 因为策划案要求无余屑时反而衰减得更快，如果在这里挡掉，晴天规则就永远不会执行。
-    /// 余屑条件放在雨天分支里判断。
+    /// 余屑只影响生长速度；晴天的衰减不受最低生长条件限制。
     /// </summary>
     protected override bool MeetsMinimum(ICellEnv cell)
     {
@@ -116,18 +119,14 @@ public class Mushroom : SporePlantsBase
             return;
         }
 
-        // 策划案把"余屑"列为最低生长条件，雨天没有余屑就只衰减不增长。
+        plan.VitalityDelta = cell.Detritus > 0 ? GrowthPerRain : GrowthWithoutDetritus;
         if (cell.Detritus <= 0)
-        {
-            plan.Log(RulePrefix + ".MIN",
-                DisplayName + " 所在格没有余屑，雨天不增长。");
-            return;
-        }
-
-        plan.VitalityDelta = GrowthPerRain;
+            plan.Log(RulePrefix + ".SLOW_GROWTH",
+                DisplayName + " 所在格没有余屑，依靠雨水缓慢生长。");
 
         // 策划案：成熟后产生 1 份孢子。冷却期间不产出，产出后进入冷却。
-        if (ProduceCooldown > 0 || Vitality < MatureVitality)
+        // 本晚增长达到成熟阈值即可产出，不额外等待一晚。
+        if (ProduceCooldown > 0 || Vitality + plan.VitalityDelta < MatureVitality)
             return;
 
         plan.ProduceKind = E_ResourceKind.Spore;

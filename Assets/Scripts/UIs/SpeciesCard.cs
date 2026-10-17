@@ -27,8 +27,8 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     [SerializeField] private TimeManager timeManager;
     [SerializeField] private TileMapManager environment;
     [SerializeField] private Camera placementCamera;
-    [SerializeField, Tooltip("与环境 Tilemap 同级且挂有 FacingCamera 的物体；留空时自动查找。")]
-    private Transform speciesParent;
+    [SerializeField] private PlantVisualBinder plantVisualBinder;
+    [SerializeField] private AnimalVisualBinder animalVisualBinder;
 
     private TimeManager subscribedTimeManager;
     private int lastRefilledDay;
@@ -40,10 +40,25 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
     private readonly List<RaycastResult> uiHits = new List<RaycastResult>();
 
     public SpeciesInfo Info => species;
-    public GameObject Prefab => species.Prefab;
+    public GameObject Prefab
+    {
+        get
+        {
+            if (environment == null || !species.IsConfigured)
+                return null;
+            if (species.Kind == SpeciesKind.Plant)
+                return plantVisualBinder != null && plantVisualBinder.isActiveAndEnabled
+                    && plantVisualBinder.Map == environment
+                    ? plantVisualBinder.GetPrefab(species.PlantSpecies) : null;
+            AnimalSpawner spawner = animalVisualBinder != null ? animalVisualBinder.Spawner : null;
+            return animalVisualBinder != null && animalVisualBinder.isActiveAndEnabled
+                && spawner != null && spawner.Map == environment
+                ? animalVisualBinder.GetPrefab(species.AnimalSpecies) : null;
+        }
+    }
     public int CurrentCount => currentCount;
     public bool CanPlace => initialized && isActiveAndEnabled && currentCount > 0
-        && species.Prefab != null && environment != null && environment.isActiveAndEnabled
+        && Prefab != null && environment != null && environment.isActiveAndEnabled
         && timeManager != null && timeManager.CanOperate;
 
     private void Reset()
@@ -72,11 +87,17 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             Debug.LogWarning("SpeciesCard：请绑定 TimeManager，才能投放生物、扣除自由操作次数并在过夜后补充数量。", this);
         if (environment == null)
             Debug.LogWarning("SpeciesCard：请绑定环境的 TileMapManager。", this);
+        ResolveVisualBinders();
+        if (!species.IsConfigured)
+            Debug.LogWarning("SpeciesCard：请为 " + species.Name + " 选择已实现的植物或动物物种。", this);
+        else if (Prefab == null)
+            Debug.LogWarning("SpeciesCard：请为 " + species.Name + " 在对应的 Visual Binder 中配置预设体，并确认 Binder 管理当前地图。", this);
     }
 
-    /// <summary>初始化新卡片；info 包含头像、名称、描述、每日数量与物种预设体。</summary>
+    /// <summary>初始化新卡片；info 选择逻辑物种，预设体来自对应的 Binder。</summary>
     public void Initialize(SpeciesInfo info, TimeManager manager = null,
-        TileMapManager map = null, Camera inputCamera = null, Transform parent = null)
+        TileMapManager map = null, Camera inputCamera = null,
+        PlantVisualBinder plants = null, AnimalVisualBinder animals = null)
     {
         CancelDrag();
         UnbindTimeManager();
@@ -89,12 +110,15 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             environment = map;
         if (inputCamera != null)
             placementCamera = inputCamera;
-        if (parent != null)
-            speciesParent = parent;
+        if (plants != null)
+            plantVisualBinder = plants;
+        if (animals != null)
+            animalVisualBinder = animals;
         if (timeManager == null)
             timeManager = FindObjectOfType<TimeManager>();
         if (environment == null)
             environment = FindObjectOfType<TileMapManager>();
+        ResolveVisualBinders();
         lastRefilledDay = timeManager != null ? timeManager.CurrentDay : 1;
         initialized = true;
         CacheDisplay();
@@ -191,6 +215,7 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
 
     public void OnBeginDrag(PointerEventData eventData)
     {
+        ResolveVisualBinders();
         if (eventData.button != PointerEventData.InputButton.Left || dragging || !CanPlace)
             return;
         dragging = true;
@@ -243,68 +268,86 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
             dragIcon.localPosition = new Vector3(point.x, point.y, 0f);
     }
 
-    /// <summary>在有效环境位置投放；仅成功创建后扣除一只库存和一次全局自由操作。</summary>
+    /// <summary>将屏幕落点转换成有效格子，再投放参与生态结算的物种。</summary>
     public bool TryPlaceAtScreenPosition(Vector2 screenPosition)
     {
+        ResolveVisualBinders();
         if (!CanPlace || IsPointerOverUI(screenPosition)
-            || !TryGetEnvironmentPosition(screenPosition, out Vector3 position)
-            || !TryGetSpeciesParent(out Transform parent))
+            || !TryGetEnvironmentCell(screenPosition, out TileCell cell))
             return false;
-        return timeManager.TryPerformFreeAction(() =>
+        return TryPlaceOnCell(cell);
+    }
+
+    /// <summary>登记成功才扣库存和操作次数；植物遵循主体/覆盖占位规则，动物进入 Spawner 的登记表。</summary>
+    public bool TryPlaceOnCell(TileCell cell)
+    {
+        ResolveVisualBinders();
+        if (!CanPlace || cell == null || cell.Manager != environment
+            || !environment.TryGetCellAtTilemapPosition(cell.TilemapPosition, out TileCell registered)
+            || registered != cell)
+            return false;
+
+        bool placed = timeManager.TryPerformFreeAction(() =>
         {
-            // 传入世界坐标，父物体自身的位移、旋转不会改变鼠标对应的投放位置。
-            GameObject instance = Instantiate(species.Prefab, position, species.Prefab.transform.rotation, parent);
-            if (instance == null)
+            bool success;
+            if (species.Kind == SpeciesKind.Plant)
+                success = PlantSettler.Place(PlantSettler.Create(species.PlantSpecies), cell);
+            else
+                success = animalVisualBinder.Spawner.TrySpawn(species.AnimalSpecies, cell, out _);
+            if (!success)
                 return false;
             currentCount--;
-            RefreshDisplay();
             return true;
         });
+
+        // 显示在逻辑登记与扣费完成后刷新，卡片不另行实例化，避免生成重复外观。
+        if (placed)
+        {
+            RefreshDisplay();
+            if (species.Kind == SpeciesKind.Plant)
+                plantVisualBinder.SyncNow();
+            else
+                animalVisualBinder.SyncNow();
+        }
+        return placed;
     }
 
-    private bool TryGetSpeciesParent(out Transform parent)
+    private void ResolveVisualBinders()
     {
-        parent = speciesParent;
-        if (parent != null)
-        {
-            if (IsSpeciesParent(parent))
-                return true;
-            Debug.LogWarning("SpeciesCard：Species Parent 必须与环境 Tilemap 同级，并挂有 FacingCamera。", this);
-            return false;
-        }
+        if (environment == null)
+            return;
 
-        Transform mapParent = environment.transform.parent;
-        FacingCamera[] candidates = mapParent != null
-            ? mapParent.GetComponentsInChildren<FacingCamera>(true)
-            : FindObjectsOfType<FacingCamera>(true);
-        foreach (FacingCamera candidate in candidates)
+        if (species.Kind == SpeciesKind.Plant && plantVisualBinder == null)
         {
-            if (!IsSpeciesParent(candidate.transform))
-                continue;
-            if (parent != null)
+            PlantVisualBinder match = null;
+            foreach (PlantVisualBinder candidate in FindObjectsOfType<PlantVisualBinder>())
             {
-                Debug.LogWarning("SpeciesCard：Tilemap 同级存在多个 FacingCamera，请在 SpeciesList 中指定 Species Parent。", this);
-                return false;
+                if (candidate.Map != environment)
+                    continue;
+                if (match != null)
+                    return;
+                match = candidate;
             }
-            parent = candidate.transform;
+            plantVisualBinder = match;
         }
-        if (parent != null)
-            return true;
-        Debug.LogWarning("SpeciesCard：未找到与 Tilemap 同级且挂有 FacingCamera 的物种父物体，本次未投放。", this);
-        return false;
+        else if (species.Kind == SpeciesKind.Animal && animalVisualBinder == null)
+        {
+            AnimalVisualBinder match = null;
+            foreach (AnimalVisualBinder candidate in FindObjectsOfType<AnimalVisualBinder>())
+            {
+                if (candidate.Spawner == null || candidate.Spawner.Map != environment)
+                    continue;
+                if (match != null)
+                    return;
+                match = candidate;
+            }
+            animalVisualBinder = match;
+        }
     }
 
-    private bool IsSpeciesParent(Transform candidate)
+    private bool TryGetEnvironmentCell(Vector2 screenPosition, out TileCell cell)
     {
-        return candidate != environment.transform
-            && candidate.parent == environment.transform.parent
-            && candidate.gameObject.scene == environment.gameObject.scene
-            && candidate.GetComponent<FacingCamera>() != null;
-    }
-
-    private bool TryGetEnvironmentPosition(Vector2 screenPosition, out Vector3 position)
-    {
-        position = default;
+        cell = null;
         Camera camera = placementCamera != null ? placementCamera : Camera.main;
         if (camera == null || !camera.pixelRect.Contains(screenPosition))
             return false;
@@ -323,10 +366,10 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
         Ray ray = camera.ScreenPointToRay(screenPosition);
         if (!new Plane(normal.normalized, origin).Raycast(ray, out float distance))
             return false;
-        position = ray.GetPoint(distance);
+        Vector3 position = ray.GetPoint(distance);
         Vector3Int cellPosition = tilemap.WorldToCell(position);
         cellPosition.z = environment.OriginCellPosition.z;
-        return tilemap.HasTile(cellPosition) && environment.TryGetCellAtTilemapPosition(cellPosition, out _);
+        return tilemap.HasTile(cellPosition) && environment.TryGetCellAtTilemapPosition(cellPosition, out cell);
     }
 
     private bool IsPointerOverUI(Vector2 screenPosition)

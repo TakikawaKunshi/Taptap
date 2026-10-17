@@ -1,27 +1,25 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>
-/// 把登记在案的動物同步成可见的占位物体。
-///
-/// 与 PlantVisualBinder 同一套思路：动物也是纯逻辑对象，不挂在场景上，
-/// 因此这里用一张贴图把它画出来，让用户能确认"它真的动了、真的吃了东西"。
-/// 物种决定染色，饱腹决定大小，饥饿发灰；DescribeShort 写进物体名便于读数值。
-/// 临时图换成正式美术时只要换 Binder 上的贴图引用。
-/// </summary>
+/// <summary>按物种实例化用户配置的预设体，并同步动物位置；未配置的物种不创建显示物体。</summary>
 [DisallowMultipleComponent]
 public class AnimalVisualBinder : MonoBehaviour
 {
-    // 位于覆盖植物 1、主体植物 2 之上；携带物再加 1，仍低于 UI 的排序值。
-    // 使用常量，避免场景中旧的 50 排序配置覆盖代码中的新值。
-    private const int SortingOrder = 3;
-
-    [SerializeField] private AnimalSpawner spawner;
     [SerializeField, Tooltip("留空时自动查找场景里的 AnimalSpawner。")]
-    private PlantSettlementBridge plantBridge;
-    [SerializeField, Tooltip("临时用图；换正式美术时直接替换这张贴图即可。")]
-    private Texture2D animalTexture;
-    [SerializeField] private Material spriteMaterial;
+    private AnimalSpawner spawner;
+
+    [Header("物种预设体（留空不创建，外观由预设体决定）")]
+    [SerializeField, InspectorName("青蛙 (Frog)")] private GameObject frogPrefab;
+    [SerializeField, InspectorName("蚯蚓 (Earthworm)")] private GameObject earthwormPrefab;
+    [SerializeField, InspectorName("蜗牛 (Snail)")] private GameObject snailPrefab;
+    [SerializeField, InspectorName("蚂蚁 (Ant)")] private GameObject antPrefab;
+    [SerializeField, InspectorName("蜘蛛 (Spider)")] private GameObject spiderPrefab;
+    [SerializeField, InspectorName("鱼类 (Fish)")] private GameObject fishPrefab;
+    [SerializeField, InspectorName("沙蚕 (Sandworm)")] private GameObject sandwormPrefab;
+    [SerializeField, InspectorName("麻雀 (Sparrow)")] private GameObject sparrowPrefab;
+    [SerializeField, InspectorName("奶蛙 (MilkFrog)")] private GameObject milkFrogPrefab;
+
+    [Header("同步")]
     [SerializeField, Min(0.05f)] private float syncInterval = 0.25f;
     [SerializeField, Tooltip("同一格多只动物沿对角线错开的间距。")]
     private float spacing = 0.18f;
@@ -30,8 +28,37 @@ public class AnimalVisualBinder : MonoBehaviour
         = new Dictionary<AnimalsBase, AnimalVisual>();
     private readonly HashSet<AnimalsBase> seen = new HashSet<AnimalsBase>();
     private readonly List<AnimalsBase> gone = new List<AnimalsBase>();
-    private Sprite cachedSprite;
+    private readonly Dictionary<ICellEnv, int> cellVisualCounts = new Dictionary<ICellEnv, int>();
     private float nextSync;
+
+    public IReadOnlyDictionary<AnimalsBase, AnimalVisual> Visuals => visuals;
+
+    public AnimalSpawner Spawner
+    {
+        get
+        {
+            if (spawner == null)
+                spawner = FindObjectOfType<AnimalSpawner>();
+            return spawner;
+        }
+    }
+
+    public GameObject GetPrefab(E_AnimalSpecies species)
+    {
+        switch (species)
+        {
+            case E_AnimalSpecies.Frog: return frogPrefab;
+            case E_AnimalSpecies.Earthworm: return earthwormPrefab;
+            case E_AnimalSpecies.Snail: return snailPrefab;
+            case E_AnimalSpecies.Ant: return antPrefab;
+            case E_AnimalSpecies.Spider: return spiderPrefab;
+            case E_AnimalSpecies.Fish: return fishPrefab;
+            case E_AnimalSpecies.Sandworm: return sandwormPrefab;
+            case E_AnimalSpecies.Sparrow: return sparrowPrefab;
+            case E_AnimalSpecies.MilkFrog: return milkFrogPrefab;
+            default: return null;
+        }
+    }
 
     private void OnEnable()
     {
@@ -45,7 +72,7 @@ public class AnimalVisualBinder : MonoBehaviour
         SyncNow();
     }
 
-    /// <summary>按登记表重画一遍；动物移动后位置也会随之更新。</summary>
+    /// <summary>同步实例、位置和名称；更换或清空预设体配置也会在下次同步时生效。</summary>
     public void SyncNow()
     {
         nextSync = Time.realtimeSinceStartup + syncInterval;
@@ -55,9 +82,10 @@ public class AnimalVisualBinder : MonoBehaviour
             return;
 
         seen.Clear();
+        cellVisualCounts.Clear();
         IReadOnlyList<AnimalsBase> animals = spawner.Animals;
         for (int i = 0; i < animals.Count; i++)
-            Touch(animals[i], i);
+            Touch(animals[i]);
 
         gone.Clear();
         foreach (KeyValuePair<AnimalsBase, AnimalVisual> pair in visuals)
@@ -68,11 +96,7 @@ public class AnimalVisualBinder : MonoBehaviour
 
         for (int i = 0; i < gone.Count; i++)
         {
-            AnimalVisual visual;
-            if (!visuals.TryGetValue(gone[i], out visual))
-                continue;
-            if (visual != null)
-                Destroy(visual.gameObject);
+            RemoveVisual(visuals[gone[i]]);
             visuals.Remove(gone[i]);
         }
     }
@@ -83,29 +107,39 @@ public class AnimalVisualBinder : MonoBehaviour
         SyncNow();
     }
 
-    private void Touch(AnimalsBase animal, int order)
+    private void Touch(AnimalsBase animal)
     {
         if (animal == null || animal.IsDead || animal.CurrentCell == null)
             return;
 
+        GameObject prefab = GetPrefab(animal.Species);
+        if (prefab == null)
+            return;
+
         seen.Add(animal);
+        cellVisualCounts.TryGetValue(animal.CurrentCell, out int order);
+        cellVisualCounts[animal.CurrentCell] = order + 1;
 
         AnimalVisual visual;
-        if (!visuals.TryGetValue(animal, out visual) || visual == null)
+        visuals.TryGetValue(animal, out visual);
+        if (visual != null && visual.SourcePrefab != prefab)
         {
-            GameObject go = new GameObject(animal.DescribeShort());
-            go.transform.SetParent(transform, false);
-            visual = go.AddComponent<AnimalVisual>();
-            visual.GetComponent<SpriteRenderer>().sharedMaterial = ResolveMaterial();
-            visual.Bind(animal, ResolveSprite(), SortingOrder);
+            RemoveVisual(visual);
+            visual = null;
+        }
+        if (visual == null)
+        {
+            GameObject go = Instantiate(prefab, transform, false);
+            visual = go.GetComponent<AnimalVisual>();
+            if (visual == null)
+                visual = go.AddComponent<AnimalVisual>();
+            visual.Bind(animal, prefab);
             visuals[animal] = visual;
         }
 
-        // ICellEnv 是给规则层用的抽象，不含渲染信息；位置要向地图层的具体格子要。
+        // 预设体的缩放、旋转、材质、颜色与渲染排序保持用户配置。
         TileCell cell = animal.CurrentCell as TileCell;
         Vector3 origin = cell != null ? cell.WorldPosition : Vector3.zero;
-
-        // 同一格上的多只动物沿对角线排开，避免完全重叠后看不清数量。
         visual.transform.position = origin + OffsetFor(order);
         visual.Refresh();
     }
@@ -116,57 +150,16 @@ public class AnimalVisualBinder : MonoBehaviour
         return new Vector3(step, step * 0.5f, 0f);
     }
 
-    private Material ResolveMaterial()
+    private void RemoveVisual(AnimalVisual visual)
     {
-        if (spriteMaterial != null)
-            return spriteMaterial;
+        if (visual == null)
+            return;
 
-        Shader shader = Shader.Find("Universal Render Pipeline/2D/Sprite-Lit-Default");
-        if (shader == null)
-            shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-        {
-            Debug.LogWarning("AnimalVisualBinder：找不到可用的精灵着色器，动物可能显示为粉色。", this);
-            return null;
-        }
-
-        spriteMaterial = new Material(shader);
-        return spriteMaterial;
-    }
-
-    /// <summary>
-    /// 临时图是竖版插画，取中央偏上的方形用于避免变成细长条。
-    /// 五个物种共用同一份 Sprite，只是染色不同。
-    /// </summary>
-    private Sprite ResolveSprite()
-    {
-        if (cachedSprite != null)
-            return cachedSprite;
-        if (animalTexture == null)
-            return null;
-
-        try
-        {
-            int side = Mathf.Min(animalTexture.width, animalTexture.height);
-            int x = (animalTexture.width - side) / 2;
-            int y = Mathf.Min(animalTexture.height - side, (int)(animalTexture.height * 0.2f));
-            Color[] pixels = animalTexture.GetPixels(x, y, side, side);
-
-            Texture2D cropped = new Texture2D(side, side, TextureFormat.RGBA32, false);
-            cropped.SetPixels(pixels);
-            cropped.Apply();
-            cropped.filterMode = FilterMode.Bilinear;
-
-            cachedSprite = Sprite.Create(cropped, new Rect(0, 0, side, side),
-                new Vector2(0.5f, 0.5f), side);
-            cachedSprite.name = animalTexture.name + "_crop";
-            return cachedSprite;
-        }
-        catch (UnityException)
-        {
-            Debug.LogWarning("AnimalVisualBinder：贴图 " + animalTexture.name
-                             + " 未开启 Read/Write，无法生成占位图。", this);
-            return null;
-        }
+        // Destroy 在帧末执行，先隐藏旧实例，避免切换预设体时短暂重叠。
+        visual.gameObject.SetActive(false);
+        if (Application.isPlaying)
+            Destroy(visual.gameObject);
+        else
+            DestroyImmediate(visual.gameObject);
     }
 }
