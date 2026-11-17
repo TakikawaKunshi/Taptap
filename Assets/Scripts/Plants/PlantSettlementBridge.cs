@@ -4,11 +4,8 @@ using UnityEngine;
 
 /// <summary>
 /// 植物结算的运行时入口。
-/// 之前整套植物规则写好了却没有被任何运行流程调用，只有测试在用。
-/// 这里用"订阅 TimeManager.DayChanged"的方式接入：
-/// 过夜协程里 NightSettlement 先写入天气历史、TimeManager 再推进天数并广播 DayChanged，
-/// 因此收到事件时 LastRecordedDay 就是刚刚结算完的那一晚，不需要改动
-/// NightSettlement / TimeManager / WeatherBase / TileMapManager 的任何一行。
+/// 订阅 TimeManager.NightSettled，在天气历史写入后结算植物，再通过 Settled 驱动动物。
+/// 生态结算不依赖日期递增，因此达到天数上限的最后一晚也不会遗漏。
 /// </summary>
 [DisallowMultipleComponent]
 [AddComponentMenu("Ecology/Plant Settlement Bridge")]
@@ -29,6 +26,13 @@ public class PlantSettlementBridge : MonoBehaviour
     private bool publishMorningReport = true;
     [SerializeField, Tooltip("勾选后可以在 Inspector 里手动重放某一天，用于复现 bug。")]
     private bool verboseLog = true;
+
+    [Header("蘑菇生长")]
+    [SerializeField, Min(Mushroom.MinimumMaxVitality), InspectorName("蘑菇活力上限")]
+    [Tooltip("最低为初始活力 2。雨夜达到上限的当晚起，上下左右有效邻格各产生 1 份余屑；运行时修改从下次结算生效，调低不会扣除已有活力。")]
+    private int mushroomMaxVitality = Mushroom.DefaultMaxVitality;
+
+    public int MushroomMaxVitality => Mathf.Max(Mushroom.MinimumMaxVitality, mushroomMaxVitality);
 
     private readonly PlantSettler settler = new PlantSettler();
     private TimeManager subscribedTimeManager;
@@ -60,7 +64,7 @@ public class PlantSettlementBridge : MonoBehaviour
     private void OnDisable()
     {
         if (subscribedTimeManager != null)
-            subscribedTimeManager.DayChanged -= OnDayChanged;
+            subscribedTimeManager.NightSettled -= OnNightSettled;
         subscribedTimeManager = null;
     }
 
@@ -81,18 +85,17 @@ public class PlantSettlementBridge : MonoBehaviour
         if (!isActiveAndEnabled || subscribedTimeManager == timeManager)
             return;
         if (subscribedTimeManager != null)
-            subscribedTimeManager.DayChanged -= OnDayChanged;
+            subscribedTimeManager.NightSettled -= OnNightSettled;
         subscribedTimeManager = timeManager;
         if (subscribedTimeManager != null)
-            subscribedTimeManager.DayChanged += OnDayChanged;
+            subscribedTimeManager.NightSettled += OnNightSettled;
     }
 
     /// <summary>
-    /// TimeManager 在过夜成功后才推进天数，所以 newDay-1 就是刚结算完的那一晚。
+    /// 接收刚完成天气记录的夜晚日期，包括不再推进到下一天的最后一晚。
     /// </summary>
-    private void OnDayChanged(int newDay)
+    private void OnNightSettled(int day)
     {
-        int day = newDay - 1;
         if (day < 1 || day <= lastSettledDay)
             return;
         if (timeManager == null || map == null)
@@ -122,7 +125,7 @@ public class PlantSettlementBridge : MonoBehaviour
             return null;
 
         // 幂等：同一晚只允许结算一次。
-        // 过夜按钮被连点、或 DayChanged 在同一天上被重复派发时，植物不能因此多发一次成长。
+        // 过夜按钮被连点、或 NightSettled 在同一天上被重复派发时，植物不能因此多发一次成长。
         // 需要重放某一天时先调用 ResetSettlement 清掉记录。
         if (day <= lastSettledDay)
         {
@@ -137,6 +140,7 @@ public class PlantSettlementBridge : MonoBehaviour
             return null;
 
         var condition = new PlantWeatherCondition(dayWeather, consecutiveSameDays, change);
+        settler.MushroomMaxVitality = MushroomMaxVitality;
         PlantSettleReport report = settler.Settle(day, condition, map.Cells);
         lastSettledDay = day;
         LastReport = report;
@@ -150,6 +154,7 @@ public class PlantSettlementBridge : MonoBehaviour
         if (day < 1 || cells == null)
             return null;
 
+        settler.MushroomMaxVitality = MushroomMaxVitality;
         PlantSettleReport report = settler.Settle(day, condition, cells);
         LastReport = report;
         Publish(report);

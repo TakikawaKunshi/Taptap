@@ -305,9 +305,15 @@ public class SpeciesCard : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndD
         {
             RefreshDisplay();
             if (species.Kind == SpeciesKind.Plant)
+            {
                 plantVisualBinder.SyncNow();
+                environment.NotifyPlantPlaced(species.PlantSpecies);
+            }
             else
+            {
                 animalVisualBinder.SyncNow();
+                environment.NotifyAnimalPlaced(species.AnimalSpecies);
+            }
         }
         return placed;
     }

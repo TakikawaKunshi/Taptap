@@ -43,12 +43,20 @@ public sealed class PlantSettleReport
 
     public void AddProduced(PlantSettlePlan plan)
     {
-        if (plan == null || plan.ProduceAmount <= 0 || plan.ProduceKind == E_ResourceKind.None)
+        if (plan == null)
             return;
-        if (Produced.TryGetValue(plan.ProduceKind, out int existing))
-            Produced[plan.ProduceKind] = existing + plan.ProduceAmount;
+        AddProduced(plan.ProduceKind, plan.ProduceAmount);
+        AddProduced(E_ResourceKind.Detritus, plan.NeighborDetritusTargets.Count);
+    }
+
+    private void AddProduced(E_ResourceKind kind, int amount)
+    {
+        if (amount <= 0 || kind == E_ResourceKind.None)
+            return;
+        if (Produced.TryGetValue(kind, out int existing))
+            Produced[kind] = existing + amount;
         else
-            Produced[plan.ProduceKind] = plan.ProduceAmount;
+            Produced[kind] = amount;
     }
 
     /// <summary>按策划案第三到第九步的顺序，把本晚结果拼成可直接写入事件日志的中文摘要。</summary>
@@ -111,6 +119,9 @@ public sealed class PlantSettleReport
 public sealed class PlantSettler
 {
     private readonly System.Random expansionRandom;
+
+    /// <summary>每次结算前应用到全部蘑菇，也覆盖本日新投放的蘑菇。</summary>
+    public int MushroomMaxVitality { get; set; } = Mushroom.DefaultMaxVitality;
 
     public PlantSettler()
     {
@@ -266,7 +277,7 @@ public sealed class PlantSettler
     }
 
     /// <summary>第一步：只读地收集全部提案。提案顺序与格子顺序一致。</summary>
-    private static List<Proposal> CollectProposals(List<ICellEnv> cells, int day, IWeatherQuery weather)
+    private List<Proposal> CollectProposals(List<ICellEnv> cells, int day, IWeatherQuery weather)
     {
         var proposals = new List<Proposal>();
         for (int c = 0; c < cells.Count; c++)
@@ -274,6 +285,8 @@ public sealed class PlantSettler
             ICellEnv cell = cells[c];
             foreach (PlantsBase plant in EnumeratePlants(cell))
             {
+                if (plant is Mushroom mushroom)
+                    mushroom.MaxVitality = MushroomMaxVitality;
                 PlantSettlePlan plan = plant.Propose(day, weather, cell);
                 if (plan == null)
                     continue;

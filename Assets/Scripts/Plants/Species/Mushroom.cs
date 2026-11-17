@@ -4,11 +4,23 @@ using UnityEngine;
 /// <summary>
 /// 蘑菇。湿润或遮蔽处可生长，余屑提供额外养分。
 /// 雨天有余屑活力+2，无余屑+1，成熟后产出一份孢子；
+/// 活力达到配置上限后停止增长，每个满足生长条件的雨夜向四邻格各产生一份余屑。
 /// 晴天活力-2，所在格没有余屑时额外再扣 1 点。
 /// </summary>
 [Serializable]
 public class Mushroom : SporePlantsBase
 {
+    public const int DefaultMaxVitality = 10;
+    public const int MinimumMaxVitality = 2;
+    private int maxVitality = DefaultMaxVitality;
+
+    /// <summary>增长上限不能低于初始活力；调低上限不会扣除已经获得的活力。</summary>
+    public int MaxVitality
+    {
+        get => maxVitality;
+        set => maxVitality = Mathf.Max(MinimumMaxVitality, value);
+    }
+
     /// <summary>雨天有余屑时的增长量；余屑只提供养分条件，不在这里消耗。</summary>
     private const int GrowthPerRain = 2;
 
@@ -119,10 +131,27 @@ public class Mushroom : SporePlantsBase
             return;
         }
 
-        plan.VitalityDelta = cell.Detritus > 0 ? GrowthPerRain : GrowthWithoutDetritus;
-        if (cell.Detritus <= 0)
+        int growth = cell.Detritus > 0 ? GrowthPerRain : GrowthWithoutDetritus;
+        plan.VitalityDelta = Mathf.Min(growth, Mathf.Max(0, MaxVitality - Vitality));
+        if (cell.Detritus <= 0 && plan.VitalityDelta > 0)
             plan.Log(RulePrefix + ".SLOW_GROWTH",
                 DisplayName + " 所在格没有余屑，依靠雨水缓慢生长。");
+
+        // 达到上限的当晚就产出；提案只保存目标，真正提交时才写入邻格。
+        if (Vitality + plan.VitalityDelta >= MaxVitality)
+        {
+            plan.NeighborDetritusDay = day;
+            foreach (ICellEnv neighbor in cell.Neighbors)
+            {
+                if (neighbor == null || plan.NeighborDetritusTargets.Contains(neighbor))
+                    continue;
+                Vector2Int offset = neighbor.Coordinates - cell.Coordinates;
+                if (Mathf.Abs(offset.x) + Mathf.Abs(offset.y) == 1)
+                    plan.NeighborDetritusTargets.Add(neighbor);
+            }
+            plan.Log(RulePrefix + ".VITALITY_CAP",
+                DisplayName + " 活力达到上限 " + MaxVitality + "，停止继续增长。");
+        }
 
         // 策划案：成熟后产生 1 份孢子。冷却期间不产出，产出后进入冷却。
         // 本晚增长达到成熟阈值即可产出，不额外等待一晚。
@@ -133,5 +162,21 @@ public class Mushroom : SporePlantsBase
         plan.ProduceAmount = 1;
         plan.ProduceCooldownDelta = 1;
         plan.Log(RulePrefix + ".SPORE", DisplayName + " 产出 1 份孢子，进入产出冷却。");
+    }
+
+    protected override void ApplyPlan(PlantSettlePlan plan, ICellEnv cell)
+    {
+        base.ApplyPlan(plan, cell);
+        if (IsDead || plan.NeighborDetritusTargets.Count == 0)
+            return;
+
+        // 局部结算时邻格也要对齐日期，保证新余屑从产生当晚开始计算两天寿命。
+        DetritusLifecycle.SettleCells(plan.NeighborDetritusDay, plan.NeighborDetritusTargets, plan.Logs);
+        foreach (ICellEnv target in plan.NeighborDetritusTargets)
+        {
+            target.Detritus++;
+            plan.Log(RulePrefix + ".NEIGHBOR_DETRITUS",
+                DisplayName + " 在相邻格 " + target.Coordinates + " 产生 1 份余屑。");
+        }
     }
 }
