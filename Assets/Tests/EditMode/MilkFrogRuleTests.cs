@@ -187,6 +187,74 @@ public class MilkFrogRuleTests
         Assert.AreEqual(2, milk.Satiety);
     }
 
+    [TestCase(false)]
+    [TestCase(true)]
+    public void MilkFrogTracksPreyThatMovedEarlierInTheSameNight(bool rain)
+    {
+        FakeMap map = Line(0, 3);
+        var frog = Place(new Frog(2), map, 1);
+        var milk = Place(new MilkFrog(0), map, 2);
+        var report = new AnimalSettler().Settle(1,
+            rain ? FakeWeather.Rain() : FakeWeather.Sun(), map.Cells, new AnimalsBase[] { milk, frog });
+
+        Assert.AreEqual(Vector2Int.zero, frog.Coordinates, "青蛙先逃离原位置。");
+        Assert.IsTrue(frog.IsDead, "无庇护且仍在移动范围内的猎物应能被追上。");
+        Assert.AreSame(frog.CurrentCell, milk.CurrentCell);
+        Assert.AreEqual(1, report.HuntedCount);
+        Assert.AreEqual(1, milk.Satiety);
+        Assert.AreEqual(0, milk.Starvation);
+    }
+
+    [Test]
+    public void HungryCarrierHuntsThenResumesSowingWithoutLosingItsSeed()
+    {
+        FakeMap map = Line(0, 3);
+        PlantSettler.Place(new Gymnosperm(), map.Get(Vector2Int.zero));
+        var milk = Place(new MilkFrog(1), map, 0);
+        var settler = new AnimalSettler();
+        settler.Settle(1, FakeWeather.Sun(), map.Cells, new[] { milk });
+        Assert.AreEqual(E_ResourceKind.Seed, milk.Carried);
+        Assert.AreEqual(0, milk.Satiety);
+
+        var frog = Place(new Frog(2), map, 2);
+        AnimalsBase[] animals = { milk, frog };
+        var world = AnimalSettler.BuildWorld(FakeWeather.Sun(), map.Cells, animals);
+        Assert.IsTrue(milk.TryGetIdleStep(world, null, out ICellEnv next, out AnimalsBase prey));
+        Assert.AreSame(frog, prey, "闲置移动也必须优先靠近食物。");
+        Assert.AreEqual(Vector2Int.right, next.Coordinates);
+        var report = settler.Settle(2, FakeWeather.Sun(), map.Cells, animals);
+        Assert.AreEqual(1, report.HuntedCount);
+        Assert.AreEqual(0, report.NewPlants.Count);
+        Assert.AreEqual(E_ResourceKind.Seed, milk.Carried);
+        Assert.AreEqual(E_PlantSpecies.Gymnosperm, milk.CarriedSeedSpecies);
+        Assert.AreEqual(0, milk.Starvation);
+
+        report = settler.Settle(3, FakeWeather.Sun(), map.Cells, animals);
+        Assert.AreEqual(1, report.NewPlants.Count);
+        Assert.IsInstanceOf<Gymnosperm>(report.NewPlants[0]);
+        Assert.AreEqual(E_ResourceKind.None, milk.Carried);
+    }
+
+    [Test]
+    public void TrackingEscapingPreyNeverExceedsWeakenedMovementLimit()
+    {
+        FakeMap map = Line(-5, 5);
+        var milk = Place(new MilkFrog(0), map, 3);
+        var settler = new AnimalSettler();
+        settler.Settle(1, FakeWeather.Sun(), map.Cells, new[] { milk });
+        settler.Settle(2, FakeWeather.Sun(), map.Cells, new[] { milk });
+        Assert.AreEqual(E_HungerState.Weak, milk.HungerState);
+        var frog = Place(new Frog(2), map, 2);
+        var world = AnimalSettler.BuildWorld(FakeWeather.Sun(), map.Cells, new AnimalsBase[] { milk, frog });
+        ICellEnv origin = milk.CurrentCell;
+        int limit = milk.MaxStepsForTonight;
+        var report = settler.Settle(3, FakeWeather.Sun(), map.Cells, new AnimalsBase[] { milk, frog });
+        Assert.IsFalse(frog.IsDead);
+        Assert.AreEqual(0, report.HuntedCount);
+        Assert.LessOrEqual(world.StepDistance(origin, milk.CurrentCell), limit);
+        Assert.IsTrue(milk.IsDead, "追不上猎物时仍按原规则饥饿死亡。");
+    }
+
     [Test]
     public void DistantPreyRequiresTravelBeforeItCanBeEaten()
     {

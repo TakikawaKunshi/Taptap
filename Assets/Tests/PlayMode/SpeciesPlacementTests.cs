@@ -17,6 +17,7 @@ public class SpeciesPlacementTests
     private Camera camera;
     private TileCell center;
     private GameObject visualPrefab;
+    private AudioClip placementSound;
 
     [SetUp]
     public void SetUp()
@@ -68,6 +69,8 @@ public class SpeciesPlacementTests
     {
         Object.DestroyImmediate(root);
         Object.DestroyImmediate(tile);
+        if (placementSound != null)
+            Object.DestroyImmediate(placementSound);
     }
 
     [Test]
@@ -185,6 +188,90 @@ public class SpeciesPlacementTests
         Assert.IsTrue(card.TryPlaceOnCell(other));
         foreach (AnimalsBase animal in animals.Animals)
             Assert.AreEqual(((TileCell)animal.CurrentCell).WorldPosition, animalBinder.Visuals[animal].transform.position);
+    }
+
+    [TestCase(SpeciesKind.Plant)]
+    [TestCase(SpeciesKind.Animal)]
+    public void SuccessfulDropPlaysPlacedSpeciesSoundEvenOnLastAction(SpeciesKind kind)
+    {
+        SpeciesInfo info = kind == SpeciesKind.Plant
+            ? Plant(E_PlantSpecies.Angiosperm) : Animal(E_AnimalSpecies.MilkFrog);
+        info.DailyCount = 1;
+        Configure(info);
+        time.ConfigureDailyActions(1);
+        CreatePlacementAudio(info, out AudioSource effects);
+        // 已有青蛙的格子点击时会优先选中青蛙，投放音效必须使用本次投放的类型。
+        Assert.IsTrue(animals.TrySpawn(E_AnimalSpecies.Frog, center, out _));
+        int placements = 0;
+        int clicks = 0;
+        map.PlantPlaced += species => { Assert.AreEqual(info.PlantSpecies, species); placements++; };
+        map.AnimalPlaced += species => { Assert.AreEqual(info.AnimalSpecies, species); placements++; };
+        map.PlantClicked += _ => clicks++;
+        map.AnimalClicked += _ => clicks++;
+
+        Assert.IsTrue(card.TryPlaceAtScreenPosition(camera.WorldToScreenPoint(center.WorldPosition)));
+        Assert.IsTrue(effects.isPlaying);
+        Assert.AreEqual(1, placements);
+        Assert.AreEqual(0, clicks);
+        Assert.AreEqual(0, card.CurrentCount);
+        Assert.AreEqual(0, time.RemainingActions);
+
+        effects.Stop();
+        Assert.IsFalse(card.TryPlaceOnCell(center));
+        Assert.IsFalse(effects.isPlaying, "库存或行动耗尽后，失败投放不播放音效。");
+        Assert.AreEqual(1, placements);
+    }
+
+    [Test]
+    public void InvalidAndOccupiedDropsDoNotPlaySound()
+    {
+        SpeciesInfo info = Plant(E_PlantSpecies.Angiosperm);
+        Configure(info);
+        CreatePlacementAudio(info, out AudioSource effects);
+        Assert.IsFalse(card.TryPlaceAtScreenPosition(new Vector2(-100f, -100f)));
+        Assert.IsFalse(effects.isPlaying);
+        Assert.IsTrue(card.TryPlaceOnCell(center));
+        effects.Stop();
+        Assert.IsFalse(card.TryPlaceOnCell(center));
+        Assert.IsFalse(effects.isPlaying, "占位冲突不播放音效。");
+        Assert.AreEqual(2, card.CurrentCount);
+        Assert.AreEqual(9, time.RemainingActions);
+    }
+
+    [TestCase(SpeciesKind.Plant)]
+    [TestCase(SpeciesKind.Animal)]
+    public void PlacementSoundSubscriptionFollowsEnableState(SpeciesKind kind)
+    {
+        SpeciesInfo info = kind == SpeciesKind.Plant
+            ? Plant(E_PlantSpecies.Angiosperm) : Animal(E_AnimalSpecies.MilkFrog);
+        Configure(info);
+        AudioPlayer player = CreatePlacementAudio(info, out AudioSource effects);
+        player.enabled = false;
+        Assert.IsTrue(card.TryPlaceOnCell(center));
+        Assert.IsFalse(effects.isPlaying);
+        player.enabled = true;
+        Assert.IsTrue(map.TryGetCell(Vector2Int.right, out TileCell other));
+        Assert.IsTrue(card.TryPlaceOnCell(other));
+        Assert.IsTrue(effects.isPlaying);
+    }
+
+    private AudioPlayer CreatePlacementAudio(SpeciesInfo info, out AudioSource effects)
+    {
+        GameObject audio = Child("Placement audio", root.transform);
+        audio.SetActive(false);
+        AudioPlayer player = audio.AddComponent<AudioPlayer>();
+        placementSound = AudioClip.Create("Placement sound", 44100, 1, 44100, false);
+        SetField(player, "map", map);
+        SetField(player, "plantSounds", info.Kind == SpeciesKind.Plant
+            ? new[] { new AudioPlayer.PlantSound { species = info.PlantSpecies, clip = placementSound } }
+            : new AudioPlayer.PlantSound[0]);
+        SetField(player, "animalSounds", info.Kind == SpeciesKind.Animal
+            ? new[] { new AudioPlayer.AnimalSound { species = info.AnimalSpecies, clip = placementSound } }
+            : new AudioPlayer.AnimalSound[0]);
+        audio.SetActive(true);
+        effects = (AudioSource)typeof(AudioPlayer).GetField("soundEffectSource",
+            BindingFlags.Instance | BindingFlags.NonPublic).GetValue(player);
+        return player;
     }
 
     private void Configure(SpeciesInfo info)

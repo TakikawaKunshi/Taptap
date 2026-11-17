@@ -17,6 +17,7 @@ public class TileMapManager : MonoBehaviour
     private MessagePanel messagePanel;
     [SerializeField, Tooltip("用于点击地图的相机；留空时使用 MainCamera。")]
     private Camera inputCamera;
+    private TimeManager timeManager;
 
     private readonly Dictionary<Vector3Int, TileCell> cells = new Dictionary<Vector3Int, TileCell>();
     private readonly List<RaycastResult> uiHits = new List<RaycastResult>();
@@ -34,6 +35,12 @@ public class TileMapManager : MonoBehaviour
     public IReadOnlyCollection<TileCell> Cells => cells.Values;
     public int CellCount => cells.Count;
     public TileCell SelectedCell { get; private set; }
+    /// <summary>仅在有效的物种点击后触发；音效与信息面板使用同一个选中结果。</summary>
+    public event System.Action<E_PlantSpecies> PlantClicked;
+    public event System.Action<E_AnimalSpecies> AnimalClicked;
+    /// <summary>仅在投放匣成功投放后触发，区别于地图点击和生态繁殖。</summary>
+    public event System.Action<E_PlantSpecies> PlantPlaced;
+    public event System.Action<E_AnimalSpecies> AnimalPlaced;
     public Vector3Int OriginCellPosition { get; private set; }
     public Vector3 OriginWorldPosition => tilemap != null ? tilemap.GetCellCenterWorld(OriginCellPosition) : transform.position;
     private Vector3 geometricCenterLocal;
@@ -182,6 +189,10 @@ public class TileMapManager : MonoBehaviour
         return cells.TryGetValue(position, out cell) && cell != null;
     }
 
+    internal void NotifyPlantPlaced(E_PlantSpecies species) => PlantPlaced?.Invoke(species);
+
+    internal void NotifyAnimalPlaced(E_AnimalSpecies species) => AnimalPlaced?.Invoke(species);
+
     /// <summary>先把屏幕点击转换为格子；每次显示一个物种，动物优先，其次主体植物、地表覆盖。</summary>
     public bool TryInspectAtScreenPosition(Vector2 screenPosition)
     {
@@ -210,6 +221,10 @@ public class TileMapManager : MonoBehaviour
             messagePanel.ShowInformation(status);
             messagePanel.SelectTab(MessageTag.Information);
         }
+        if (animal != null)
+            AnimalClicked?.Invoke(animal.Species);
+        else
+            PlantClicked?.Invoke(plant.Species);
         return true;
     }
 
@@ -225,6 +240,10 @@ public class TileMapManager : MonoBehaviour
     public bool TryGetCellAtScreenPosition(Vector2 screenPosition, out TileCell cell)
     {
         cell = null;
+        if (timeManager == null)
+            timeManager = FindObjectOfType<TimeManager>();
+        if (timeManager != null && timeManager.IsGameSettlement)
+            return false;
         if (!isActiveAndEnabled || !initialized || cells.Count == 0 || IsPointerOverUI(screenPosition))
             return false;
         Camera camera = inputCamera != null ? inputCamera : Camera.main;

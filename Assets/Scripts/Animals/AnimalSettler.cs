@@ -361,6 +361,10 @@ public sealed class AnimalSettler
             if (animal.IsDead || animal.LastSettledDay >= day)
                 continue;
 
+            // 猎物可能已经先行动；奶蛙从本晚起点追向它的实际位置，仍受通行与步数限制。
+            if (animal is MilkFrog milkFrog)
+                milkFrog.RefreshHuntPlan(plan, world);
+
             ICellEnv from = proposal.Cell;
             ICellEnv destination = from;
 

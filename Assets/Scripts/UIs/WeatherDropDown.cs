@@ -52,7 +52,7 @@ public class WeatherDropDown : MonoBehaviour
     private int CurrentWeatherDay => timeManager != null ? timeManager.CurrentDay : 1;
     // 天气切换使用独立点数；行动力耗尽后的等待阶段仍允许切换天气。
     private bool IsWeatherInteractionAllowed => timeManager == null
-        || (timeManager.isActiveAndEnabled && !timeManager.IsNightSettlement);
+        || (timeManager.isActiveAndEnabled && !timeManager.IsNightSettlement && !timeManager.IsGameSettlement);
 
     private void Reset()
     {

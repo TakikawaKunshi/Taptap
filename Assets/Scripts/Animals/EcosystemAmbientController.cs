@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-/// <summary>通过现有公开接口补充闲置游走及死亡显示清理，不推进每日结算。</summary>
+/// <summary>控制动物随机游走，过夜前将显示位置落实为结算起点，并清理死亡显示。</summary>
 [DisallowMultipleComponent]
 [DefaultExecutionOrder(-200)]
 public sealed class EcosystemAmbientController : MonoBehaviour
@@ -12,8 +12,12 @@ public sealed class EcosystemAmbientController : MonoBehaviour
     [SerializeField] private AnimalSettlementBridge settlementBridge;
     [SerializeField] private TimeManager timeManager;
 
-    [Header("闲置游走")]
-    [SerializeField, Min(0f), Tooltip("用户停止操作多久后开始游走，单位：秒。")]
+    [Header("随机游走")]
+    [SerializeField, Tooltip("所有动物随机选择可通行邻格；关闭后使用各物种原有的觅食、搬运和庇护移动策略。")]
+    private bool randomWandering = true;
+    [SerializeField, Tooltip("勾选时，玩家操作会暂停游走；默认关闭，动物可在玩家操作期间继续移动。")]
+    private bool pauseOnUserInput;
+    [SerializeField, Min(0f), Tooltip("开局、过夜后或操作暂停结束后，等待多久开始游走，单位：秒。")]
     private float idleDelay = 1.5f;
     [SerializeField, Min(0.05f), Tooltip("基础移动速度；各物种使用自己的速度倍率。")]
     private float moveSpeed = 0.45f;
@@ -43,6 +47,8 @@ public sealed class EcosystemAmbientController : MonoBehaviour
     private static readonly PlantWeatherCondition MovementWeather = new PlantWeatherCondition(E_WeatherType.Sun);
     private readonly AnimalWorldView passage = new AnimalWorldView(MovementWeather, null, null);
     private AnimalSettlementBridge subscribedBridge;
+    private TimeManager subscribedTimeManager;
+    private bool movementLocked;
     private float idleTime;
     private Vector3 previousMouse;
 
@@ -50,14 +56,21 @@ public sealed class EcosystemAmbientController : MonoBehaviour
     {
         ResolveReferences();
         idleTime = 0f;
+        movementLocked = false;
         previousMouse = Input.mousePosition;
     }
 
     private void OnDisable()
     {
         if (subscribedBridge != null)
+        {
+            subscribedBridge.Settling -= FreezeAtCurrentPositions;
             subscribedBridge.Settled -= OnSettled;
+        }
         subscribedBridge = null;
+        if (subscribedTimeManager != null)
+            subscribedTimeManager.PhaseChanged -= OnPhaseChanged;
+        subscribedTimeManager = null;
         motions.Clear();
         if (animalBinder != null && animalBinder.isActiveAndEnabled)
             animalBinder.SyncNow();
@@ -71,10 +84,28 @@ public sealed class EcosystemAmbientController : MonoBehaviour
         if (plantBinder == null) plantBinder = FindObjectOfType<PlantVisualBinder>();
         if (timeManager == null) timeManager = FindObjectOfType<TimeManager>();
         if (settlementBridge == null) settlementBridge = FindObjectOfType<AnimalSettlementBridge>();
-        if (subscribedBridge == settlementBridge) return;
-        if (subscribedBridge != null) subscribedBridge.Settled -= OnSettled;
-        subscribedBridge = settlementBridge;
-        if (subscribedBridge != null) subscribedBridge.Settled += OnSettled;
+        if (subscribedBridge != settlementBridge)
+        {
+            if (subscribedBridge != null)
+            {
+                subscribedBridge.Settling -= FreezeAtCurrentPositions;
+                subscribedBridge.Settled -= OnSettled;
+            }
+            subscribedBridge = settlementBridge;
+            if (subscribedBridge != null)
+            {
+                subscribedBridge.Settling += FreezeAtCurrentPositions;
+                subscribedBridge.Settled += OnSettled;
+            }
+        }
+        if (subscribedTimeManager != timeManager)
+        {
+            if (subscribedTimeManager != null)
+                subscribedTimeManager.PhaseChanged -= OnPhaseChanged;
+            subscribedTimeManager = timeManager;
+            if (subscribedTimeManager != null)
+                subscribedTimeManager.PhaseChanged += OnPhaseChanged;
+        }
     }
 
     private void Update()
@@ -103,8 +134,11 @@ public sealed class EcosystemAmbientController : MonoBehaviour
             || Input.mouseScrollDelta.sqrMagnitude > 0f;
     }
 
-    /// <summary>由自定义输入系统通知操作；从当前位置暂停，闲置后接着移动。</summary>
-    public void NotifyUserInteraction() => idleTime = 0f;
+    /// <summary>开启操作暂停时，可由自定义输入系统通知操作。</summary>
+    public void NotifyUserInteraction()
+    {
+        if (pauseOnUserInput) idleTime = 0f;
+    }
 
     /// <summary>推进显示和闲逛，可用于回放验证；deltaTime 为本帧游戏时间。</summary>
     public void Tick(float deltaTime, bool userInteracting)
@@ -115,10 +149,14 @@ public sealed class EcosystemAmbientController : MonoBehaviour
         if (spawner == null) return;
         CleanupDead(spawner);
         deltaTime = Mathf.Max(0f, deltaTime);
-        bool night = timeManager != null && (timeManager.IsNightSettlement || timeManager.IsSettlementRunning);
-        if (userInteracting || night) idleTime = 0f;
+        bool night = timeManager != null && (timeManager.IsNightSettlement
+            || timeManager.IsSettlementRunning || timeManager.IsGameSettlement);
+        if (night && !movementLocked) FreezeAtCurrentPositions();
+        movementLocked = night;
+        bool inputPaused = pauseOnUserInput && userInteracting;
+        if (inputPaused || night) idleTime = 0f;
         else idleTime += deltaTime;
-        bool canMove = !userInteracting && !night && Time.timeScale > 0f && idleTime >= idleDelay;
+        bool canMove = !inputPaused && !night && Time.timeScale > 0f && idleTime >= idleDelay;
 
         registered.Clear();
         foreach (AnimalsBase animal in spawner.Animals)
@@ -185,12 +223,14 @@ public sealed class EcosystemAmbientController : MonoBehaviour
         {
             motion.Rest -= deltaTime;
             if (motion.Rest > 0f) return;
-            // 每只动物在自己的停留计时结束后，才调用所属物种的闲逛策略。
-            // 控制器只负责插值、通行检查和暂停，不统一决定去哪里，也不执行每日动作。
+            // 每只动物独立停留、选路；默认随机游走，食物与庇护不会让它一直停在原地。
+            // 随机移动只改变位置，取食、搬运、饥饿仍由夜间结算处理。
             IWeatherQuery weather = map.Weather != null
                 ? new PlantWeatherCondition(map.Weather.weatherType) : MovementWeather;
             var world = new AnimalWorldView(weather, map.Cells, spawner.Animals);
-            TileCell next = motion.Behaviour.ChooseStep(animal, world, motion.PreviousCell) as TileCell;
+            TileCell next = (randomWandering
+                ? motion.Behaviour.ChooseRandomStep(animal, world, motion.PreviousCell)
+                : motion.Behaviour.ChooseStep(animal, world, motion.PreviousCell)) as TileCell;
             if (next == motion.Cell || !ValidCell(next, map) || !passage.CanEnter(animal, next)
                 || !IsNeighbor(motion.Cell, next))
             {
@@ -225,6 +265,54 @@ public sealed class EcosystemAmbientController : MonoBehaviour
 
     private float RandomRest(Motion motion) => Random.Range(Mathf.Max(0f, restSeconds.x),
         Mathf.Max(restSeconds.x, restSeconds.y, 0f)) * motion.Behaviour.RestMultiplier;
+
+    private void OnPhaseChanged(DayPhase phase)
+    {
+        movementLocked = phase == DayPhase.NightSettlement || phase == DayPhase.GameSettlement;
+        if (movementLocked) FreezeAtCurrentPositions();
+    }
+
+    /// <summary>
+    /// 在建立结算世界快照前固定当前位置。走到两格之间时，以显示位置更接近的合法格为起点；
+    /// 不回到投放位置，也不强行完成尚未走到的路程。重复调用不会再次移动。
+    /// </summary>
+    private void FreezeAtCurrentPositions()
+    {
+        AnimalSpawner spawner = animalBinder != null ? animalBinder.Spawner : null;
+        if (spawner == null) return;
+        idleTime = 0f;
+        foreach (var pair in motions)
+        {
+            AnimalsBase animal = pair.Key;
+            Motion motion = pair.Value;
+            TileCell cell = animal.CurrentCell as TileCell;
+            if (animal.IsDead || !ValidCell(cell, spawner.Map)) continue;
+
+            // 已经被其他结算或外部逻辑移动过时，不能用旧动画覆盖新的逻辑位置。
+            if (cell == motion.Cell && animal.LastSettledDay == motion.SettledDay
+                && motion.Target != null && motion.Target != cell
+                && ValidCell(motion.Target, spawner.Map) && IsNeighbor(cell, motion.Target)
+                && passage.CanEnter(animal, motion.Target))
+            {
+                Vector3 position = motion.Position - motion.Offset;
+                if ((position - motion.Target.WorldPosition).sqrMagnitude
+                    < (position - cell.WorldPosition).sqrMagnitude)
+                {
+                    cell = motion.Target;
+                    animal.MoveTo(cell);
+                }
+            }
+
+            motion.Cell = cell;
+            motion.Target = null;
+            motion.PreviousCell = null;
+            motion.SettledDay = animal.LastSettledDay;
+            motion.Behaviour.Reset(cell);
+            motion.Position = cell.WorldPosition + motion.Offset;
+            motion.Rest = RandomRest(motion);
+            if (motion.Visual != null) motion.Visual.transform.position = motion.Position;
+        }
+    }
 
     private static bool IsNeighbor(ICellEnv cell, ICellEnv target)
     {

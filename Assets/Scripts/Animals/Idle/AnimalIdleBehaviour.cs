@@ -10,6 +10,12 @@ public abstract class AnimalIdleBehaviour
     public virtual void Reset(ICellEnv cell) { }
     public abstract ICellEnv ChooseStep(AnimalsBase animal, IAnimalWorld world, ICellEnv previous);
 
+    /// <summary>所有动物通用的随机游走：选择可通行邻格，避免立即折返，不执行每日行为。</summary>
+    public ICellEnv ChooseRandomStep(AnimalsBase animal, IAnimalWorld world, ICellEnv previous)
+    {
+        return Wander(animal, world, previous, cell => 0f);
+    }
+
     public static AnimalIdleBehaviour Create(E_AnimalSpecies species)
     {
         switch (species)

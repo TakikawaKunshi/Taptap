@@ -32,6 +32,12 @@ public sealed class PlantSettlePlan
     /// <summary>对该格余屑的增减，可以为负。</summary>
     public int DetritusDelta { get; set; }
 
+    /// <summary>提交时在这些四邻格各产生一份余屑；只读提案阶段保存目标快照。</summary>
+    public List<ICellEnv> NeighborDetritusTargets { get; } = new List<ICellEnv>();
+
+    /// <summary>邻格余屑的产生日期，保证局部结算也能正确计算寿命。</summary>
+    public int NeighborDetritusDay { get; set; }
+
     /// <summary>枯萎回收时产出的余屑。大于 0 表示本晚直接从地图移除。</summary>
     public int RecycleToDetritus { get; set; }
 
@@ -73,6 +79,7 @@ public sealed class PlantSettlePlan
         && !ExpansionGranted
         && ProduceAmount == 0
         && DetritusDelta == 0
+        && NeighborDetritusTargets.Count == 0
         && RecycleToDetritus == 0
         && GrowthPointsDelta == 0
         && ProduceCooldownDelta == 0

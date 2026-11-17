@@ -38,6 +38,9 @@ public class AnimalSettlementBridge : MonoBehaviour
     /// <summary>界面与晨报可以订阅它，动物状态变化时无需轮询。</summary>
     public event Action<AnimalSettleReport> Settled;
 
+    /// <summary>建立世界快照之前触发，让游走控制器提交当前位置作为本晚移动起点。</summary>
+    public event Action Settling;
+
     private void Awake()
     {
         ResolveReferences();
@@ -134,6 +137,7 @@ public class AnimalSettlementBridge : MonoBehaviour
             return null;
         }
 
+        Settling?.Invoke();
         var condition = new PlantWeatherCondition(dayWeather, consecutiveSameDays, change);
         AnimalSettleReport report = settler.Settle(day, condition, map.Cells, spawner.Animals);
         lastSettledDay = day;

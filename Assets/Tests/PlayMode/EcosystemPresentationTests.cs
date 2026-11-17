@@ -129,6 +129,7 @@ public class EcosystemPresentationTests
     [Test]
     public void InputPausesInPlaceAndIdleDelayResumesEvenWithoutActions()
     {
+        Set(ambient, "pauseOnUserInput", true);
         AnimalsBase animal = Spawn(E_AnimalSpecies.Frog);
         ambient.Tick(0.4f, false);
         Vector3 moving = binder.Visuals[animal].transform.position;
@@ -164,6 +165,8 @@ public class EcosystemPresentationTests
     [Test]
     public void HungryMilkFrogSmoothlyApproachesPreyAndPausesForInput()
     {
+        Set(ambient, "randomWandering", false);
+        Set(ambient, "pauseOnUserInput", true);
         AnimalsBase milk = Spawn(E_AnimalSpecies.MilkFrog);
         Set(milk, "satiety", 0);
         map.TryGetCell(Vector2Int.right, out TileCell target);
@@ -245,10 +248,15 @@ public class EcosystemPresentationTests
         Assert.AreEqual(center.WorldPosition, binder.Visuals[animal].transform.position);
     }
 
-    [Test]
-    public void RandomRoutesUseMultipleDirectionsAndNewDropsJoinAutomatically()
+    [TestCase(E_AnimalSpecies.Frog)]
+    [TestCase(E_AnimalSpecies.Earthworm)]
+    [TestCase(E_AnimalSpecies.Snail)]
+    [TestCase(E_AnimalSpecies.Ant)]
+    [TestCase(E_AnimalSpecies.Spider)]
+    [TestCase(E_AnimalSpecies.MilkFrog)]
+    public void RandomRoutesUseMultipleDirectionsAndNewDropsJoinAutomatically(E_AnimalSpecies species)
     {
-        AnimalsBase first = Spawn(E_AnimalSpecies.Frog);
+        AnimalsBase first = Spawn(species);
         var directions = new HashSet<Vector2Int>();
         for (int i = 0; i < 24; i++)
         {
@@ -262,6 +270,124 @@ public class EcosystemPresentationTests
         AnimalsBase added = Spawn(E_AnimalSpecies.MilkFrog);
         ambient.Tick(5f, false);
         Assert.AreNotSame(center, added.CurrentCell);
+    }
+
+    [TestCase(E_AnimalSpecies.Frog)]
+    [TestCase(E_AnimalSpecies.Earthworm)]
+    [TestCase(E_AnimalSpecies.Snail)]
+    [TestCase(E_AnimalSpecies.Ant)]
+    [TestCase(E_AnimalSpecies.Spider)]
+    [TestCase(E_AnimalSpecies.MilkFrog)]
+    public void RandomRoamingContinuesNearFoodAndShelterDuringUserInput(E_AnimalSpecies species)
+    {
+        var moss = new Moss();
+        PlantSettler.Place(moss, center);
+        center.Detritus = 2;
+        AnimalsBase animal = Spawn(species);
+        if (species == E_AnimalSpecies.Ant || species == E_AnimalSpecies.MilkFrog)
+            animal.SetCarried(E_ResourceKind.Seed);
+        int vitality = moss.Vitality;
+        E_ResourceKind carried = animal.Carried;
+
+        ambient.NotifyUserInteraction();
+        ambient.Tick(10f, true);
+
+        Assert.AreNotSame(center, animal.CurrentCell);
+        Assert.AreEqual(2, animal.Satiety);
+        Assert.AreEqual(0, animal.Starvation);
+        Assert.AreEqual(0, animal.LastSettledDay);
+        Assert.AreEqual(carried, animal.Carried);
+        Assert.AreEqual(vitality, moss.Vitality);
+        Assert.AreEqual(2, center.Detritus);
+    }
+
+    [TestCase(E_AnimalSpecies.Frog)]
+    [TestCase(E_AnimalSpecies.Earthworm)]
+    [TestCase(E_AnimalSpecies.Snail)]
+    [TestCase(E_AnimalSpecies.Ant)]
+    [TestCase(E_AnimalSpecies.Spider)]
+    [TestCase(E_AnimalSpecies.MilkFrog)]
+    public void SettlementStartsAtCurrentRandomPositionEvenBeforeArrival(E_AnimalSpecies species)
+    {
+        AnimalsBase animal = Spawn(species);
+        // 完成一格路程的 60%，画面已经跨入相邻格，但尚未到达该格中心。
+        float speed = AnimalIdleBehaviour.Create(species).SpeedMultiplier;
+        ambient.Tick(0.9f / speed, false);
+        Assert.AreSame(center, animal.CurrentCell);
+        TileCell expected = NearestCell(binder.Visuals[animal].transform.position);
+        Assert.AreNotSame(center, expected);
+        ICellEnv startingCell = null;
+        bridge.Settling += () => startingCell = animal.CurrentCell;
+
+        bridge.SettleDay(1, E_WeatherType.Sun);
+
+        Assert.AreSame(expected, startingCell, "世界快照必须从当前画面所在格建立。");
+        Assert.AreEqual(1, animal.LastSettledDay);
+        ICellEnv settledCell = animal.CurrentCell;
+        ambient.Tick(0f, false);
+        Assert.AreSame(settledCell, animal.CurrentCell, "旧游走目标不能覆盖夜间结算的位置。");
+        Assert.AreEqual(((TileCell)settledCell).WorldPosition, binder.Visuals[animal].transform.position);
+    }
+
+    [UnityTest]
+    public IEnumerator NightClickFreezesCurrentPositionBeforeEcologyAndLocksWandering()
+    {
+        AnimalsBase animal = Spawn(E_AnimalSpecies.Frog);
+        WeatherBase weather = Child("Weather").AddComponent<WeatherBase>();
+        Set(map, "weather", weather);
+        NightSettlement night = time.gameObject.AddComponent<NightSettlement>();
+        Set(night, "weather", weather);
+        Set(night, "settlementDelay", 0f);
+        Set(time, "nightSettlement", night);
+        Set(time, "maxDays", 1);
+        time.NightSettled += day => bridge.SettleDay(day, weather.weatherType);
+        ambient.Tick(0.9f / AnimalIdleBehaviour.Create(animal.Species).SpeedMultiplier, false);
+        TileCell expected = NearestCell(binder.Visuals[animal].transform.position);
+        Assert.AreNotSame(center, expected);
+
+        Assert.IsTrue(time.TryStartNightSettlement());
+        Assert.AreSame(expected, animal.CurrentCell, "点击过夜时立即固定位置，早于天气和植物变化。");
+        ambient.Tick(10f, false);
+        Assert.AreSame(expected, animal.CurrentCell);
+        float deadline = Time.realtimeSinceStartup + 5f;
+        while (time.IsSettlementRunning && Time.realtimeSinceStartup < deadline) yield return null;
+        Assert.IsTrue(time.IsGameSettlement);
+        Assert.AreEqual(1, animal.LastSettledDay);
+        ICellEnv settled = animal.CurrentCell;
+        Vector3 displayed = binder.Visuals[animal].transform.position;
+        ambient.Tick(20f, false);
+        Assert.AreSame(settled, animal.CurrentCell);
+        Assert.AreEqual(displayed, binder.Visuals[animal].transform.position);
+    }
+
+    [Test]
+    public void NightFreezeDoesNotMoveIntoANewObstacleOrOverwriteExternalPosition()
+    {
+        AnimalsBase animal = Spawn(E_AnimalSpecies.Frog);
+        ambient.Tick(0.9f / AnimalIdleBehaviour.Create(animal.Species).SpeedMultiplier, false);
+        TileCell target = NearestCell(binder.Visuals[animal].transform.position);
+        Assert.AreNotSame(center, target);
+        PlantSettler.Place(new Angiosperm(), target);
+        Set(time, "<Phase>k__BackingField", DayPhase.NightSettlement);
+        ambient.Tick(0f, false);
+        Assert.AreSame(center, animal.CurrentCell);
+
+        Set(time, "<Phase>k__BackingField", DayPhase.FirstFreeAction);
+        ambient.Tick(0.4f, false);
+        map.TryGetCell(new Vector2Int(-1, -1), out TileCell external);
+        animal.MoveTo(external);
+        Set(time, "<Phase>k__BackingField", DayPhase.NightSettlement);
+        ambient.Tick(0f, false);
+        Assert.AreSame(external, animal.CurrentCell);
+    }
+
+    private TileCell NearestCell(Vector3 position)
+    {
+        TileCell nearest = center;
+        foreach (TileCell cell in map.Cells)
+            if ((cell.WorldPosition - position).sqrMagnitude < (nearest.WorldPosition - position).sqrMagnitude)
+                nearest = cell;
+        return nearest;
     }
 
     [Test]

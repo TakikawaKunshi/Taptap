@@ -67,7 +67,8 @@ public sealed class MilkFrog : AnimalsBase
 
     protected override bool TryDeliver(AnimalSettlePlan plan, int day, IAnimalWorld world, ICellEnv cell)
     {
-        if (Carried != E_ResourceKind.Seed)
+        // 饥饿时暂停搬运，保留种子，进食后再继续送达。
+        if (Carried != E_ResourceKind.Seed || Satiety == 0)
             return false;
 
         PlanDelivery(plan, world, FindRoutes(world));
@@ -190,10 +191,10 @@ public sealed class MilkFrog : AnimalsBase
         if (world == null || CurrentCell == null || IsDead) return false;
         Dictionary<ICellEnv, Route> routes = FindRoutes(world);
         var plan = new AnimalSettlePlan();
-        if (Carried == E_ResourceKind.Seed)
-            PlanDelivery(plan, world, routes);
-        else if (Satiety == 0)
+        if (Satiety == 0)
             PlanForage(plan, world, routes, preferredPrey ?? previousPrey);
+        else if (Carried == E_ResourceKind.Seed)
+            PlanDelivery(plan, world, routes);
         else
             PlanRoutine(plan, world, routes);
 
@@ -209,6 +210,26 @@ public sealed class MilkFrog : AnimalsBase
             destination = routes[destination].Previous;
         next = destination;
         return true;
+    }
+
+    /// <summary>执行已获准的捕猎前重新寻路；只追原猎物，不绕过资源竞争改吃其他动物。</summary>
+    internal void RefreshHuntPlan(AnimalSettlePlan plan, IAnimalWorld world)
+    {
+        if (plan.Action != E_AnimalAction.Hunt || plan.AnimalTarget == null)
+            return;
+
+        AnimalsBase prey = plan.AnimalTarget;
+        Dictionary<ICellEnv, Route> routes = FindRoutes(world);
+        plan.MoveTarget = null;
+        plan.Action = E_AnimalAction.None;
+        if (!CanHunt(prey, world) || prey.CurrentCell == null || !routes.ContainsKey(prey.CurrentCell))
+            return;
+
+        plan.RememberFood = prey.CurrentCell;
+        if (Travel(plan, prey.CurrentCell, routes))
+            plan.Action = E_AnimalAction.Hunt;
+        else
+            plan.Log(RulePrefix + ".CHASE", DisplayName + " 继续追踪移动后的猎物，本晚尚未到达。");
     }
 
     private static bool IsBetterPrey(AnimalsBase candidate, int distance, AnimalsBase best,

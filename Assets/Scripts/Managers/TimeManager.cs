@@ -8,7 +8,8 @@ public enum DayPhase
     // 保留原枚举值：已使用过自由操作、但当天仍有剩余次数的阶段。
     SecondFreeAction,
     NightSettlement,
-    WaitingForNightSettlement
+    WaitingForNightSettlement,
+    GameSettlement
 }
 
 [DisallowMultipleComponent]
@@ -16,6 +17,8 @@ public class TimeManager : MonoBehaviour
 {
     [SerializeField, Min(1), Tooltip("新游戏从第几天开始，默认第 1 天。")]
     private int startingDay = 1;
+    [SerializeField, Min(1), Tooltip("游戏天数上限；最后一天完成过夜后进入游戏结算，不再开启下一天。")]
+    private int maxDays = 7;
     [SerializeField, Tooltip("负责过夜结算的组件；不指定时尝试获取本物体上的 NightSettlement。")]
     private NightSettlement nightSettlement;
     private int dailyActions = 2;
@@ -25,16 +28,22 @@ public class TimeManager : MonoBehaviour
     public int CurrentDay { get; private set; } = 1;
     public DayPhase Phase { get; private set; } = DayPhase.FirstFreeAction;
     public bool IsNightSettlement => Phase == DayPhase.NightSettlement;
+    public bool IsGameSettlement => Phase == DayPhase.GameSettlement;
+    public int MaxDays => Mathf.Max(1, maxDays);
     public bool CanOperate => isActiveAndEnabled
-        && !IsNightSettlement && RemainingActions > 0;
+        && !IsNightSettlement && !IsGameSettlement && RemainingActions > 0;
     public bool IsSettlementRunning => settlementRoutine != null;
-    public bool CanRequestNightSettlement => isActiveAndEnabled && !IsSettlementRunning
+    public bool CanRequestNightSettlement => isActiveAndEnabled && !IsGameSettlement && !IsSettlementRunning
         && nightSettlement != null && nightSettlement.CanSettle;
     public string LastSettlementError { get; private set; }
     public int DailyActions => dailyActions;
-    public int RemainingActions => IsNightSettlement ? 0 : Mathf.Max(0, dailyActions - usedActions);
+    public int RemainingActions => IsNightSettlement || IsGameSettlement ? 0 : Mathf.Max(0, dailyActions - usedActions);
 
     public event Action<int> DayChanged;
+    /// <summary>天气记录完成后结算当晚生态；最后一天也会触发，参数是本晚日期。</summary>
+    public event Action<int> NightSettled;
+    /// <summary>游戏结算入口：最后一晚生态已更新、操作已锁定后触发一次，参数是最终天数。</summary>
+    public event Action<int> GameSettlementStarted;
     public event Action<DayPhase> PhaseChanged;
     // 面板和输入控件订阅此事件，也能响应停用、恢复和结算失败。
     public event Action StateChanged;
@@ -58,7 +67,7 @@ public class TimeManager : MonoBehaviour
         if (initialized)
             return;
         initialized = true;
-        CurrentDay = Mathf.Max(1, startingDay);
+        CurrentDay = Mathf.Clamp(startingDay, 1, MaxDays);
         if (nightSettlement == null)
             nightSettlement = GetComponent<NightSettlement>();
         UpdateActionPhase();
@@ -142,6 +151,8 @@ public class TimeManager : MonoBehaviour
 
     private void UpdateActionPhase()
     {
+        if (IsGameSettlement)
+            return;
         // 次数耗尽仅等待用户点击过夜，不自动推进日期。
         Phase = RemainingActions == 0 ? DayPhase.WaitingForNightSettlement
             : usedActions == 0 ? DayPhase.FirstFreeAction : DayPhase.SecondFreeAction;
@@ -150,7 +161,7 @@ public class TimeManager : MonoBehaviour
     /// <summary>由过夜按钮点击调用。允许直接结束当天；中断或失败后重试保留原结算日期和天气。</summary>
     public bool TryStartNightSettlement()
     {
-        if (!isActiveAndEnabled || IsSettlementRunning || advancing || lastNightRequestFrame == Time.frameCount)
+        if (!isActiveAndEnabled || IsGameSettlement || IsSettlementRunning || advancing || lastNightRequestFrame == Time.frameCount)
             return false;
         if (!HasSettlementConfiguration())
             return false;
@@ -220,14 +231,22 @@ public class TimeManager : MonoBehaviour
         advancing = true;
         try
         {
+            // 生态结算独立于日期递增，保证最后一晚也完整执行植物、动物结算。
+            NightSettled?.Invoke(pendingNightDay);
+            LastSettlementError = null;
+            lastAdvanceFrame = Time.frameCount;
+            lastNightRequestFrame = Time.frameCount;
+            if (pendingNightDay >= MaxDays)
+            {
+                EnterGameSettlement();
+                yield break;
+            }
+
             // 只有过夜成功才进入下一天，发布事件时所有状态都已更新。
             CurrentDay = pendingNightDay + 1;
             Phase = DayPhase.FirstFreeAction;
             usedActions = 0;
             UpdateActionPhase();
-            LastSettlementError = null;
-            lastAdvanceFrame = Time.frameCount;
-            lastNightRequestFrame = Time.frameCount;
             DayChanged?.Invoke(CurrentDay);
             PhaseChanged?.Invoke(Phase);
             StateChanged?.Invoke();
@@ -236,5 +255,21 @@ public class TimeManager : MonoBehaviour
         {
             advancing = false;
         }
+    }
+
+    private void EnterGameSettlement()
+    {
+        if (IsGameSettlement)
+            return;
+        Phase = DayPhase.GameSettlement;
+        PhaseChanged?.Invoke(Phase);
+        StateChanged?.Invoke();
+        OnGameSettlement();
+        GameSettlementStarted?.Invoke(CurrentDay);
+    }
+
+    /// <summary>预留游戏结算逻辑。可重写此函数，或订阅 GameSettlementStarted 接入结算界面与评分。</summary>
+    protected virtual void OnGameSettlement()
+    {
     }
 }
